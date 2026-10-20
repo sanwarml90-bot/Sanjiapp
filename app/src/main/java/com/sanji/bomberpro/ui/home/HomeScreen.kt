@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.History
@@ -45,6 +47,7 @@ import com.google.firebase.auth.FirebaseUser
 import com.sanji.bomberpro.data.AuthManager
 import com.sanji.bomberpro.data.UserProfile
 import com.sanji.bomberpro.data.UserRole
+import com.sanji.bomberpro.navigation.Routes
 import com.sanji.bomberpro.theme.LocalSanjiColors
 
 @Composable
@@ -70,13 +73,13 @@ fun HomeScreen(
                     user = user,
                     role = role,
                     profile = profile,
-                    onStartBlast = { /* Session 3 */ },
+                    onStartBlast = { onNavigate(Routes.SMS_BLAST) },
                     onOpenWallet = { currentTab = HomeTab.WALLET },
                 )
-                HomeTab.BLAST -> PlaceholderScreen("SMS Blast", "Session 3 me full working")
-                HomeTab.OTP -> PlaceholderScreen("OTP Manager", "Session 4 me full working")
-                HomeTab.HISTORY -> PlaceholderScreen("History", "Session 4 me full working")
-                HomeTab.WALLET -> PlaceholderScreen("Wallet", "Session 5 me full working")
+                HomeTab.BLAST -> PlaceholderScreen("SMS Blast", "Tap START on home")
+                HomeTab.OTP -> PlaceholderScreen("OTP Manager", "Session 3 me full working")
+                HomeTab.HISTORY -> PlaceholderScreen("History", "Session 3 me full working")
+                HomeTab.WALLET -> PlaceholderScreen("Wallet", "Session 4 me full working")
             }
         }
     }
@@ -91,12 +94,15 @@ private fun HomeTabContent(
     onOpenWallet: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
+    val scrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(scrollState)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
+        // Top bar
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -172,6 +178,7 @@ private fun HomeTabContent(
 
         Spacer(Modifier.height(24.dp))
 
+        // START SMS BLAST
         Surface(
             onClick = onStartBlast,
             modifier = Modifier
@@ -215,6 +222,7 @@ private fun HomeTabContent(
 
         Spacer(Modifier.height(24.dp))
 
+        // Stats
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -264,9 +272,24 @@ private fun HomeTabContent(
         Spacer(Modifier.height(8.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            QuickAccessChip(Icons.Default.History, "History", {}, Modifier.weight(1f))
-            QuickAccessChip(Icons.Default.CardGiftcard, "Refer", {}, Modifier.weight(1f))
-            QuickAccessChip(Icons.Default.Settings, "Settings", {}, Modifier.weight(1f))
+            QuickAccessChip(
+                Icons.Default.History,
+                "History",
+                onClick = { currentTab = HomeTab.HISTORY },
+                modifier = Modifier.weight(1f),
+            )
+            QuickAccessChip(
+                Icons.Default.CardGiftcard,
+                "Refer",
+                onClick = { },
+                modifier = Modifier.weight(1f),
+            )
+            QuickAccessChip(
+                Icons.Default.Settings,
+                "Settings",
+                onClick = { },
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }
@@ -285,7 +308,12 @@ private fun StatCard(
         color = colors.surface,
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            Icon(icon, contentDescription = null, tint = colors.primary, modifier = Modifier.size(20.dp))
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = colors.primary,
+                modifier = Modifier.size(20.dp),
+            )
             Spacer(Modifier.height(10.dp))
             Text(
                 text = value,
@@ -316,7 +344,12 @@ private fun QuickAccessChip(
             modifier = Modifier.padding(vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Icon(icon, contentDescription = null, tint = colors.primary, modifier = Modifier.size(20.dp))
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = colors.primary,
+                modifier = Modifier.size(20.dp),
+            )
             Spacer(Modifier.height(6.dp))
             Text(label, fontSize = 11.sp, color = colors.onBackground)
         }
@@ -333,7 +366,12 @@ private fun PlaceholderScreen(title: String, subtitle: String) {
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+            Text(
+                title,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = colors.onBackground,
+            )
             Spacer(Modifier.height(8.dp))
             Text(subtitle, fontSize = 13.sp, color = colors.onSurfaceVariant)
         }
