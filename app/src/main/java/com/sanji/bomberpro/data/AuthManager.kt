@@ -3,6 +3,8 @@ package com.sanji.bomberpro.data
 import android.content.Context
 import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FirebaseFirestore
@@ -38,6 +40,9 @@ class AuthManager(private val context: Context) {
         }
     }
 
+    // ============================================================
+    //  GOOGLE SIGN-IN (kept for when OAuth consent is set up)
+    // ============================================================
     suspend fun signInWithGoogleIdToken(idToken: String): Result<FirebaseUser> {
         return try {
             val credential = GoogleAuthProvider.getCredential(idToken, null)
@@ -54,6 +59,53 @@ class AuthManager(private val context: Context) {
         }
     }
 
+    // ============================================================
+    //  EMAIL + PASSWORD (sign-in OR auto-sign-up)
+    // ============================================================
+    suspend fun signInOrSignUpWithEmail(email: String, password: String): Result<FirebaseUser> {
+        return try {
+            val result = try {
+                auth.signInWithEmailAndPassword(email, password).await()
+            } catch (e: Exception) {
+                val userMissing =
+                    e is FirebaseAuthInvalidUserException ||
+                    (e is FirebaseAuthInvalidCredentialsException &&
+                            e.errorCode == "ERROR_USER_NOT_FOUND") ||
+                    e.message?.contains("no user record", ignoreCase = true) == true ||
+                    e.message?.contains("user-not-found", ignoreCase = true) == true ||
+                    e.message?.contains("INVALID_LOGIN_CREDENTIALS", ignoreCase = true) == true &&
+                            !emailAlreadyExists(email)
+
+                if (userMissing) {
+                    // User doesn't exist — create account
+                    auth.createUserWithEmailAndPassword(email, password).await()
+                } else {
+                    throw e
+                }
+            }
+
+            val user = result.user ?: return Result.failure(Exception("No user returned"))
+            ensureUserDoc(user)
+            loadProfileAndRole(user)
+            Result.success(user)
+        } catch (e: Exception) {
+            Log.e(TAG, "Email sign-in/up failed", e)
+            _authState.value = AuthState.Error("Login failed: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun emailAlreadyExists(email: String): Boolean {
+        return try {
+            auth.fetchSignInMethodsForEmail(email).await().signInMethods?.isNotEmpty() == true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    // ============================================================
+    //  USER DOC CREATION (auto-owner for owner email)
+    // ============================================================
     private suspend fun ensureUserDoc(user: FirebaseUser) {
         try {
             val uid = user.uid
@@ -69,7 +121,7 @@ class AuthManager(private val context: Context) {
                     mapOf(
                         "uid" to uid,
                         "email" to (user.email ?: ""),
-                        "displayName" to (user.displayName ?: ""),
+                        "displayName" to (user.displayName ?: (user.email?.substringBefore("@") ?: "")),
                         "photoUrl" to (user.photoUrl?.toString() ?: ""),
                         "role" to role,
                         "credits" to 0,
@@ -119,6 +171,9 @@ class AuthManager(private val context: Context) {
         }
     }
 
+    // ============================================================
+    //  LOAD PROFILE + ROLE
+    // ============================================================
     private suspend fun loadProfileAndRole(user: FirebaseUser) {
         try {
             val email = user.email ?: ""
@@ -148,13 +203,15 @@ class AuthManager(private val context: Context) {
                 UserProfile(
                     uid = user.uid,
                     email = profileDoc.getString("email") ?: email,
-                    displayName = profileDoc.getString("displayName") ?: user.displayName ?: "",
+                    displayName = profileDoc.getString("displayName")
+                        ?: user.displayName
+                        ?: (user.email?.substringBefore("@") ?: "User"),
                     photoUrl = profileDoc.getString("photoUrl"),
                     role = profileDoc.getString("role") ?: "user",
                     credits = (profileDoc.getLong("credits") ?: 0L).toInt(),
                     coins = (profileDoc.getLong("coins") ?: 0L).toInt(),
                     subscriptionPlan = (sub["plan"] as? String) ?: "free",
-                    subscriptionExpiresAt = (sub["expiresAt"] as? Long) ?: 0L,
+                    subscriptionExpiresAt = (sub["expiresAt"] as? Number)?.toLong() ?: 0L,
                     totalBlasts = (profileDoc.getLong("totalBlasts") ?: 0L).toInt(),
                     totalSms = (profileDoc.getLong("totalSms") ?: 0L).toInt(),
                     totalOtps = (profileDoc.getLong("totalOtps") ?: 0L).toInt(),
