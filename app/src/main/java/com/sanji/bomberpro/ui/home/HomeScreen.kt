@@ -75,6 +75,7 @@ fun HomeScreen(
                     profile = profile,
                     onStartBlast = { onNavigate(Routes.SMS_BLAST) },
                     onOpenWallet = { currentTab = HomeTab.WALLET },
+                    onOpenHistory = { currentTab = HomeTab.HISTORY },
                 )
                 HomeTab.BLAST -> PlaceholderScreen("SMS Blast", "Tap START on home")
                 HomeTab.OTP -> PlaceholderScreen("OTP Manager", "Session 3 me full working")
@@ -92,6 +93,7 @@ private fun HomeTabContent(
     profile: UserProfile?,
     onStartBlast: () -> Unit,
     onOpenWallet: () -> Unit,
+    onOpenHistory: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
     val scrollState = rememberScrollState()
@@ -102,7 +104,6 @@ private fun HomeTabContent(
             .verticalScroll(scrollState)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        // Top bar
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -178,7 +179,6 @@ private fun HomeTabContent(
 
         Spacer(Modifier.height(24.dp))
 
-        // START SMS BLAST
         Surface(
             onClick = onStartBlast,
             modifier = Modifier
@@ -222,7 +222,6 @@ private fun HomeTabContent(
 
         Spacer(Modifier.height(24.dp))
 
-        // Stats
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -275,7 +274,7 @@ private fun HomeTabContent(
             QuickAccessChip(
                 Icons.Default.History,
                 "History",
-                onClick = { currentTab = HomeTab.HISTORY },
+                onClick = onOpenHistory,
                 modifier = Modifier.weight(1f),
             )
             QuickAccessChip(
