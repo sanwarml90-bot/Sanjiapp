@@ -144,4 +144,60 @@ class AuthManager(private val context: Context) {
 
             val profile = if (profileDoc.exists()) {
                 @Suppress("UNCHECKED_CAST")
-                val sub = profileDoc.get("subscription") as? Map
+                val sub = profileDoc.get("subscription") as? Map<String, Any?> ?: emptyMap()
+                UserProfile(
+                    uid = user.uid,
+                    email = profileDoc.getString("email") ?: email,
+                    displayName = profileDoc.getString("displayName") ?: user.displayName ?: "",
+                    photoUrl = profileDoc.getString("photoUrl"),
+                    role = profileDoc.getString("role") ?: "user",
+                    credits = (profileDoc.getLong("credits") ?: 0L).toInt(),
+                    coins = (profileDoc.getLong("coins") ?: 0L).toInt(),
+                    subscriptionPlan = (sub["plan"] as? String) ?: "free",
+                    subscriptionExpiresAt = (sub["expiresAt"] as? Long) ?: 0L,
+                    totalBlasts = (profileDoc.getLong("totalBlasts") ?: 0L).toInt(),
+                    totalSms = (profileDoc.getLong("totalSms") ?: 0L).toInt(),
+                    totalOtps = (profileDoc.getLong("totalOtps") ?: 0L).toInt(),
+                    referCode = profileDoc.getString("referCode") ?: "",
+                    referredBy = profileDoc.getString("referredBy"),
+                    banned = profileDoc.getBoolean("banned") ?: false,
+                    banReason = profileDoc.getString("banReason") ?: "",
+                    termsAccepted = profileDoc.getBoolean("termsAccepted") ?: false,
+                    termsAcceptedAt = profileDoc.getLong("termsAcceptedAt") ?: 0L,
+                    createdAt = profileDoc.getLong("createdAt") ?: 0L,
+                    lastActive = profileDoc.getLong("lastActive") ?: 0L,
+                )
+            } else null
+
+            _authState.value = AuthState.LoggedIn(user, role, profile)
+        } catch (e: Exception) {
+            Log.e(TAG, "loadProfileAndRole failed", e)
+            _authState.value = AuthState.Error("Profile load failed: ${e.message}", e)
+        }
+    }
+
+    fun signOut() {
+        auth.signOut()
+        _authState.value = AuthState.LoggedOut
+    }
+
+    private fun generateReferCode(uid: String): String {
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        var seed = uid.hashCode().toLong() and 0x7FFFFFFF
+        val sb = StringBuilder("SJ")
+        repeat(8) {
+            seed = (seed * 1103515245 + 12345) and 0x7FFFFFFF
+            sb.append(alphabet[(seed % alphabet.length).toInt()])
+        }
+        return sb.toString()
+    }
+
+    private fun hashEmail(email: String): String =
+        email.lowercase().trim().replace("@", "_at_").replace(".", "_dot_")
+
+    private fun nowSec(): Long = System.currentTimeMillis() / 1000L
+
+    companion object {
+        private const val TAG = "AuthManager"
+    }
+}
