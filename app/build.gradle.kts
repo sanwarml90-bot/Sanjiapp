@@ -9,7 +9,6 @@ plugins {
     id("com.google.firebase.crashlytics")
 }
 
-// Load keystore props from either local file (local dev) OR gradle env (CI)
 val keystorePropsFile = rootProject.file("keystore.properties")
 val keystoreProps = Properties().apply {
     if (keystorePropsFile.exists()) {
@@ -53,8 +52,8 @@ android {
     buildTypes {
         debug {
             isMinifyEnabled = false
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
+            // NO applicationIdSuffix — keep same package as release
+            // so google-services.json matches
         }
         release {
             isMinifyEnabled = true
@@ -128,7 +127,6 @@ dependencies {
 
     // Core
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.core:core-splashscreen:1.0.1")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
