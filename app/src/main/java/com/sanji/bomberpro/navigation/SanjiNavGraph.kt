@@ -8,6 +8,7 @@ import androidx.navigation.compose.composable
 import com.sanji.bomberpro.data.AuthManager
 import com.sanji.bomberpro.data.AuthState
 import com.sanji.bomberpro.ui.auth.LoginScreen
+import com.sanji.bomberpro.ui.blast.SmsBlastScreen
 import com.sanji.bomberpro.ui.home.HomeScreen
 import com.sanji.bomberpro.ui.splash.SplashScreen
 
@@ -15,6 +16,7 @@ object Routes {
     const val SPLASH = "splash"
     const val LOGIN = "login"
     const val HOME = "home"
+    const val SMS_BLAST = "sms_blast"
 }
 
 @Composable
@@ -67,6 +69,22 @@ fun SanjiNavGraph(
                     authManager = authManager,
                     onNavigate = { route -> navController.navigate(route) },
                 )
+            }
+        }
+
+        composable(Routes.SMS_BLAST) {
+            val logged = authState
+            if (logged is AuthState.LoggedIn) {
+                SmsBlastScreen(
+                    profile = logged.profile,
+                    onBack = { navController.popBackStack() },
+                )
+            } else {
+                LaunchedEffect(Unit) {
+                    navController.navigate(Routes.LOGIN) {
+                        popUpTo(Routes.HOME) { inclusive = true }
+                    }
+                }
             }
         }
     }
