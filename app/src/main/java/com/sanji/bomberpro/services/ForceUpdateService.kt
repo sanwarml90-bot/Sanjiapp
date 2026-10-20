@@ -15,8 +15,23 @@ data class UpdateInfo(
     val forceUpdate: Boolean,
     val currentVersion: String,
 ) {
-    fun isForceUpdate(): Boolean = compareVersion(currentVersion, minVersion) < 0 || forceUpdate
-    fun isNewerAvailable(): Boolean = compareVersion(currentVersion, latestVersion) < 0
+    fun isForceUpdate(): Boolean =
+        compareVersion(currentVersion, minVersion) < 0 || forceUpdate
+
+    fun isNewerAvailable(): Boolean =
+        compareVersion(currentVersion, latestVersion) < 0
+}
+
+private fun compareVersion(a: String, b: String): Int {
+    val pa = a.split(".").mapNotNull { it.toIntOrNull() }
+    val pb = b.split(".").mapNotNull { it.toIntOrNull() }
+    val n = maxOf(pa.size, pb.size)
+    for (i in 0 until n) {
+        val x = pa.getOrElse(i) { 0 }
+        val y = pb.getOrElse(i) { 0 }
+        if (x != y) return x.compareTo(y)
+    }
+    return 0
 }
 
 class ForceUpdateService {
@@ -41,17 +56,5 @@ class ForceUpdateService {
         } catch (e: Exception) {
             null
         }
-    }
-
-    private fun compareVersion(a: String, b: String): Int {
-        val pa = a.split(".").mapNotNull { it.toIntOrNull() }
-        val pb = b.split(".").mapNotNull { it.toIntOrNull() }
-        val n = maxOf(pa.size, pb.size)
-        for (i in 0 until n) {
-            val x = pa.getOrElse(i) { 0 }
-            val y = pb.getOrElse(i) { 0 }
-            if (x != y) return x.compareTo(y)
-        }
-        return 0
     }
 }
