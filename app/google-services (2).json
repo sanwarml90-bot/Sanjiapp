@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "246986227337",
+    "firebase_url": "https://sanji-bomber-pro-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "sanji-bomber-pro",
+    "storage_bucket": "sanji-bomber-pro.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:246986227337:android:0cfcddb35126f47be0d058",
+        "android_client_info": {
+          "package_name": "com.sanji.bomberpro"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "246986227337-b5em7vp5pvisjjece7mccgkoem85scc7.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.sanji.bomberpro",
+            "certificate_hash": "bd6eac50c35091b2e8dfeddbb0bb14ca1273a44d"
+          }
+        },
+        {
+          "client_id": "246986227337-7nmps9kuig9fg2vgolm6ppoh0qkuc6nq.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBobFep8WX8Yc3eICxJ-9z1DncV-sAu9xQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "246986227337-7nmps9kuig9fg2vgolm6ppoh0qkuc6nq.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
