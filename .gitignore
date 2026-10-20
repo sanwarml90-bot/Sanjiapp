@@ -1,0 +1,33 @@
+# Gradle
+.gradle/
+build/
+*/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Keystore (never commit)
+*.jks
+*.keystore
+keystore.properties
+keystore_base64.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Secrets — do NOT commit these
+secrets.properties
+.env
+.env.local
+
+# NOTE: google-services.json IS committed (private repo, encrypted transit)
