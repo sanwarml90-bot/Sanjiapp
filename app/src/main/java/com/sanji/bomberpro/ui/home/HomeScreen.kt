@@ -114,6 +114,7 @@ fun HomeScreen(
                         AdminScreen(
                             adminUid = user.uid,
                             adminEmail = userEmail,
+                            adminName = userName,
                             isOwner = isOwner,
                             onExit = { currentTab = HomeTab.HOME },
                         )
