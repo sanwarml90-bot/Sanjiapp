@@ -1,6 +1,7 @@
 package com.sanji.bomberpro.navigation
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -14,6 +15,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,11 +35,15 @@ import com.sanji.bomberpro.theme.LocalSanjiColors
 import com.sanji.bomberpro.ui.auth.ForceJoinScreen
 import com.sanji.bomberpro.ui.auth.LoginScreen
 import com.sanji.bomberpro.ui.auth.TermsScreen
+import com.sanji.bomberpro.ui.blast.BulkBlastScreen
 import com.sanji.bomberpro.ui.blast.SmsBlastScreen
 import com.sanji.bomberpro.ui.home.HomeScreen
 import com.sanji.bomberpro.ui.notifications.NotificationsScreen
 import com.sanji.bomberpro.ui.refer.ReferScreen
 import com.sanji.bomberpro.ui.splash.SplashScreen
+import com.sanji.bomberpro.ui.templates.TemplatesScreen
+import com.sanji.bomberpro.ui.wallet.GiftScreen
+import com.sanji.bomberpro.ui.wallet.TransferScreen
 import kotlinx.coroutines.launch
 
 object Routes {
@@ -64,18 +70,15 @@ fun SanjiNavGraph(
 ) {
     val colors = LocalSanjiColors.current
     val userData = remember { UserDataService() }
-    val termsService = remember { TermsService() }
     val forceJoinService = remember { ForceJoinService() }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
 
-    // term + force-join gate state
     var termsVersion by remember { mutableStateOf(1) }
     var termsRequired by remember { mutableStateOf(true) }
     var forceJoinEnabled by remember { mutableStateOf(false) }
     var gateChecked by remember { mutableStateOf(false) }
     var forceJoinVerified by remember { mutableStateOf(true) }
 
-    // Load settings when user logs in
     LaunchedEffect(authState) {
         val logged = authState as? AuthState.LoggedIn ?: return@LaunchedEffect
         gateChecked = false
@@ -100,7 +103,6 @@ fun SanjiNavGraph(
         gateChecked = true
     }
 
-    // determine current gate
     val loggedIn = authState as? AuthState.LoggedIn
     val profile: UserProfile? = loggedIn?.profile
     val needsTerms = gateChecked && loggedIn != null &&
@@ -109,7 +111,6 @@ fun SanjiNavGraph(
             forceJoinEnabled && !forceJoinVerified
 
     Box(modifier = Modifier.fillMaxSize().background(colors.background)) {
-        // Only show NavHost when user is not behind a gate
         if (!needsTerms && !needsForceJoin) {
             NavHost(
                 navController = navController,
@@ -158,9 +159,7 @@ fun SanjiNavGraph(
                             onNavigate = { route ->
                                 try {
                                     navController.navigate(route)
-                                } catch (_: Exception) {
-                                    // ignore nav error if route not defined
-                                }
+                                } catch (_: Exception) {}
                             },
                         )
                     }
@@ -170,13 +169,15 @@ fun SanjiNavGraph(
                     SmsBlastScreen(
                         authManager = authManager,
                         onBack = { navController.popBackStack() },
+                        onOpenBulkMode = {
+                            navController.navigate(Routes.BULK_BLAST)
+                        },
                     )
                 }
 
                 composable(Routes.BULK_BLAST) {
-                    ComingSoonScreen(
-                        title = "Bulk Blast",
-                        message = "Bulk blast mode is coming soon.",
+                    BulkBlastScreen(
+                        authManager = authManager,
                         onBack = { navController.popBackStack() },
                     )
                 }
@@ -201,59 +202,66 @@ fun SanjiNavGraph(
                     }
                 }
 
-                // ---- placeholders for Session 6-8 ----
                 composable(Routes.TRANSFER) {
-                    ComingSoonScreen(
-                        title = "Transfer",
-                        message = "Transfer credits / coins is coming soon.",
-                        onBack = { navController.popBackStack() },
-                    )
+                    val logged = authState as? AuthState.LoggedIn
+                    if (logged != null) {
+                        TransferScreen(
+                            uid = logged.user.uid,
+                            onBack = { navController.popBackStack() },
+                        )
+                    }
                 }
+
                 composable(Routes.GIFT) {
-                    ComingSoonScreen(
-                        title = "Gift Coins",
-                        message = "Gift coins to friends is coming soon.",
-                        onBack = { navController.popBackStack() },
-                    )
+                    val logged = authState as? AuthState.LoggedIn
+                    if (logged != null) {
+                        GiftScreen(
+                            uid = logged.user.uid,
+                            onBack = { navController.popBackStack() },
+                        )
+                    }
                 }
+
                 composable(Routes.TEMPLATES) {
-                    ComingSoonScreen(
-                        title = "Templates",
-                        message = "Message templates are coming soon.",
-                        onBack = { navController.popBackStack() },
-                    )
+                    val logged = authState as? AuthState.LoggedIn
+                    if (logged != null) {
+                        TemplatesScreen(
+                            uid = logged.user.uid,
+                            onBack = { navController.popBackStack() },
+                        )
+                    }
                 }
+
+                // still-coming-soon (Session 7-8)
                 composable(Routes.GIVEAWAYS) {
                     ComingSoonScreen(
                         title = "Giveaways",
-                        message = "Giveaways are coming soon.",
+                        message = "Giveaways coming in a future update.",
                         onBack = { navController.popBackStack() },
                     )
                 }
                 composable(Routes.ANNOUNCEMENTS) {
                     ComingSoonScreen(
                         title = "Announcements",
-                        message = "Announcements are coming soon.",
+                        message = "Announcements coming in a future update.",
                         onBack = { navController.popBackStack() },
                     )
                 }
                 composable(Routes.USER_SETTINGS) {
                     ComingSoonScreen(
                         title = "Settings",
-                        message = "User settings are coming soon.",
+                        message = "User settings coming in a future update.",
                         onBack = { navController.popBackStack() },
                     )
                 }
             }
         }
 
-        // ---- gate overlays ----
         if (needsTerms) {
             TermsScreen(
                 authManager = authManager,
                 onAccepted = {
                     scope.launch {
-                        // re-check after acceptance
                         val settings = userData.getGlobalSettings()
                         termsVersion = settings.termsVersion
                         termsRequired = settings.termsRequired
@@ -262,9 +270,7 @@ fun SanjiNavGraph(
                         gateChecked = true
                     }
                 },
-                onDeclined = {
-                    // user signed out from TermsScreen
-                },
+                onDeclined = {},
             )
         } else if (needsForceJoin) {
             val logged = authState as? AuthState.LoggedIn
@@ -276,9 +282,7 @@ fun SanjiNavGraph(
                     onVerified = {
                         forceJoinVerified = true
                     },
-                    onSkip = {
-                        // signed out from ForceJoin
-                    },
+                    onSkip = {},
                 )
             }
         }
@@ -294,7 +298,7 @@ private fun ComingSoonScreen(
     val colors = LocalSanjiColors.current
     Column(
         modifier = Modifier.fillMaxSize().background(colors.background).padding(24.dp),
-        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+        verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
