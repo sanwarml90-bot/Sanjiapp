@@ -68,14 +68,12 @@ class AdminService {
             if (!isValidFirebaseUrl(cleanUrl)) {
                 return@withContext Result.failure(Exception("Invalid Firebase URL"))
             }
-            // Check duplicate
             val existing = db.collection(FirebaseConfig.COL_FIREBASES)
                 .whereEqualTo("url", cleanUrl)
                 .limit(1).get().await()
             if (!existing.isEmpty) {
                 return@withContext Result.failure(Exception("URL already exists"))
             }
-
             val ref = db.collection(FirebaseConfig.COL_FIREBASES).document()
             ref.set(
                 mapOf(
@@ -243,6 +241,161 @@ class AdminService {
                 ref.update("coins", (current - amount).toLong()).await()
                 logTransaction(uid, "coin_deduct", -amount, "admin-deduct")
                 logAudit(adminUid, "admin_coin_deduct", uid, amount, "")
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+    // ============================================================
+    //  BAN / UNBAN
+    // ============================================================
+    suspend fun banUser(uid: String, reason: String, adminUid: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_USERS).document(uid)
+                    .update(
+                        mapOf(
+                            "banned" to true,
+                            "banReason" to reason.take(200),
+                        )
+                    ).await()
+                logAudit(adminUid, "admin_ban", uid, 0, reason)
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+    suspend fun unbanUser(uid: String, adminUid: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_USERS).document(uid)
+                    .update(
+                        mapOf(
+                            "banned" to false,
+                            "banReason" to "",
+                        )
+                    ).await()
+                logAudit(adminUid, "admin_unban", uid, 0, "")
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+    // ============================================================
+    //  LIMITS
+    // ============================================================
+    suspend fun setSendLimit(uid: String, limit: Int?, adminUid: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val ref = db.collection(FirebaseConfig.COL_USERS).document(uid)
+                if (limit == null) {
+                    ref.update("maxSendLimit", FieldValue.delete()).await()
+                } else {
+                    ref.update("maxSendLimit", limit.toLong()).await()
+                }
+                logAudit(adminUid, "admin_set_send_limit", uid, limit ?: -1, "")
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+    suspend fun setOtpLimit(uid: String, limit: Int?, adminUid: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val ref = db.collection(FirebaseConfig.COL_USERS).document(uid)
+                if (limit == null) {
+                    ref.update("maxOtpLimit", FieldValue.delete()).await()
+                } else {
+                    ref.update("maxOtpLimit", limit.toLong()).await()
+                }
+                logAudit(adminUid, "admin_set_otp_limit", uid, limit ?: -1, "")
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+    // ============================================================
+    //  NOTES / TAGS
+    // ============================================================
+    suspend fun setNotes(uid: String, notes: String, adminUid: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_USERS).document(uid)
+                    .update("notes", notes.take(500)).await()
+                logAudit(adminUid, "admin_set_notes", uid, 0, notes.take(80))
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+    suspend fun setTags(uid: String, tags: List<String>, adminUid: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_USERS).document(uid)
+                    .update("tags", tags.take(10)).await()
+                logAudit(adminUid, "admin_set_tags", uid, 0, tags.joinToString(",").take(120))
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+    // ============================================================
+    //  PREMIUM
+    // ============================================================
+    suspend fun setPremium(uid: String, premium: Boolean, adminUid: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_USERS).document(uid)
+                    .update("premium", premium).await()
+                logAudit(adminUid, "admin_premium", uid, if (premium) 1 else 0, "")
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+    // ============================================================
+    //  SUBSCRIPTION
+    // ============================================================
+    suspend fun grantSubscription(uid: String, plan: String, days: Int, adminUid: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val now = System.currentTimeMillis() / 1000L
+                val expiry = now + days.toLong() * 86400L
+                db.collection(FirebaseConfig.COL_USERS).document(uid)
+                    .update(
+                        mapOf(
+                            "subscription.plan" to plan,
+                            "subscription.expiresAt" to expiry,
+                            "subscription.startedAt" to now,
+                        )
+                    ).await()
+                logAudit(adminUid, "admin_grant_sub", uid, days, plan)
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+    suspend fun revokeSubscription(uid: String, adminUid: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_USERS).document(uid)
+                    .update(
+                        mapOf(
+                            "subscription.plan" to "free",
+                            "subscription.expiresAt" to 0L,
+                            "subscription.startedAt" to 0L,
+                        )
+                    ).await()
+                logAudit(adminUid, "admin_revoke_sub", uid, 0, "")
                 true
             } catch (e: Exception) {
                 false
