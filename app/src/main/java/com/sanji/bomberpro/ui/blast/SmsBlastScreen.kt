@@ -1,5 +1,10 @@
 package com.sanji.bomberpro.ui.blast
 
+import android.app.Activity
+import android.content.Intent
+import android.provider.ContactsContract
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -92,11 +98,10 @@ fun SmsBlastScreen(
     val userData = remember { UserDataService() }
     val executor = remember { BlastExecutor(rtdb) }
 
-    // live profile fields (credits, premium)
     var liveCredits by remember { mutableStateOf(logged.profile?.credits ?: 0) }
     var livePremium by remember { mutableStateOf(logged.profile?.premium ?: false) }
 
-    androidx.compose.runtime.LaunchedEffect(uid) {
+    LaunchedEffect(uid) {
         UserDocObserver.observeUserDoc(uid).collect { map ->
             liveCredits = (map["credits"] as? Number)?.toInt() ?: 0
             livePremium = map["premium"] as? Boolean ?: false
@@ -123,21 +128,52 @@ fun SmsBlastScreen(
     var reserved by remember { mutableStateOf(0) }
     var cancelFlag = remember { AtomicBoolean(false) }
 
+    // contact picker
+    val contactPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val data: Intent? = result.data
+            val uri = data?.data
+            if (uri != null) {
+                try {
+                    context.contentResolver.query(
+                        uri,
+                        arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+                        null, null, null,
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val idx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                            if (idx >= 0) {
+                                val raw = cursor.getString(idx) ?: ""
+                                val cleaned = raw.trim()
+                                    .replace(" ", "")
+                                    .replace("-", "")
+                                    .replace("(", "")
+                                    .replace(")", "")
+                                    .replace(".", "")
+                                if (cleaned.length >= 7) {
+                                    number = cleaned
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background)
             .padding(16.dp),
     ) {
-        // ============================================================
-        //  TOP BAR
-        // ============================================================
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = {
                 if (step == BlastStep.PROGRESS) {
                     cancelFlag.set(true)
                 } else if (step == BlastStep.RESULT) {
-                    // reset and go home
                     step = BlastStep.NUMBER
                     number = ""
                     message = ""
@@ -151,7 +187,6 @@ fun SmsBlastScreen(
             }
             Spacer(Modifier.weight(1f))
 
-            // credits badge
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = colors.primary.copy(alpha = 0.15f),
@@ -182,8 +217,15 @@ fun SmsBlastScreen(
                     number = number,
                     onChange = { number = it },
                     onOpenContacts = {
-                        // Contact picker — handled in Session 6 bulk/contact flow.
-                        // For now: user types manually. A button exists so the entry point is visible.
+                        val intent = Intent(
+                            Intent.ACTION_PICK,
+                            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                        )
+                        try {
+                            contactPickerLauncher.launch(intent)
+                        } catch (_: Exception) {
+                            errorMsg = "Could not open contacts"
+                        }
                     },
                     isPremium = livePremium,
                     onOpenBulkMode = onOpenBulkMode,
@@ -376,7 +418,6 @@ private fun StepNumber(
 
     Spacer(Modifier.height(10.dp))
 
-    // Contacts — pre-wired button (full picker in Session 6)
     Surface(
         onClick = onOpenContacts,
         shape = RoundedCornerShape(12.dp),
@@ -498,7 +539,6 @@ private fun StepSpeedPower(
     Text("Choose speed and power multiplier", fontSize = 12.sp, color = colors.onSurfaceVariant)
     Spacer(Modifier.height(20.dp))
 
-    // Speed
     Text("SPEED", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.primary, letterSpacing = 1.sp)
     Spacer(Modifier.height(6.dp))
     BlastSpeed.entries.forEach { s ->
@@ -530,7 +570,6 @@ private fun StepSpeedPower(
 
     Spacer(Modifier.height(20.dp))
 
-    // Power
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text("POWER", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.primary, letterSpacing = 1.sp)
         Spacer(Modifier.weight(1f))
@@ -585,7 +624,6 @@ private fun StepSpeedPower(
                     }
                 }
             }
-            // pad row to always fill 3 columns
             repeat(3 - rowModes.size) {
                 Spacer(Modifier.weight(1f))
             }
