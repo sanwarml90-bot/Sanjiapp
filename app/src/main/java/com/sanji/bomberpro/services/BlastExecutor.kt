@@ -1,5 +1,6 @@
 package com.sanji.bomberpro.services
 
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.awaitClose
@@ -7,31 +8,40 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
 sealed class BlastEvent {
-    data class Started(val total: Int, val devices: Int) : BlastEvent()
+    data class Started(
+        val total: Int,
+        val devices: Int,
+        val reservedCredits: Int,
+    ) : BlastEvent()
+
     data class Progress(
         val sent: Int,
         val failed: Int,
         val total: Int,
         val ratePerSec: Double,
     ) : BlastEvent()
+
     data class Complete(
         val sent: Int,
         val failed: Int,
         val durationSec: Long,
         val cancelled: Boolean,
+        val refundedCredits: Int,
+        val finalBalance: Int,
     ) : BlastEvent()
+
     data class Error(val message: String) : BlastEvent()
 }
 
@@ -43,14 +53,12 @@ enum class BlastSpeed(val delayMs: Long, val label: String) {
 
 class BlastExecutor(private val rtdb: RealtimeDbService) {
 
-    /**
-     * Execute a blast.
-     * - Emits BlastEvent.Progress every ~500ms
-     * - Honours per-device 0.25s cooldown
-     * - Threads = parallel devices
-     * - 3-attempt retry inside sendSms
-     */
     fun execute(
+        uid: String,
+        isAdmin: Boolean,
+        userData: UserDataService,
+        userName: String,
+        userEmail: String,
         devices: List<Device>,
         target: String,
         message: String,
@@ -61,19 +69,37 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
     ): Flow<BlastEvent> = callbackFlow {
         if (devices.isEmpty()) {
             trySend(BlastEvent.Error("No devices online"))
-            close(); return@callbackFlow
+            close()
+            return@callbackFlow
         }
         if (count <= 0) {
             trySend(BlastEvent.Error("Count must be > 0"))
-            close(); return@callbackFlow
+            close()
+            return@callbackFlow
         }
 
-        val total = count
+        // ----------------- RESERVE CREDITS -----------------
+        val reserved: Int = if (isAdmin) count else minOf(count, userData.getCredits(uid))
+        if (!isAdmin) {
+            if (reserved <= 0) {
+                trySend(BlastEvent.Error("No credits available"))
+                close()
+                return@callbackFlow
+            }
+            if (!userData.deductCredits(uid, reserved, "blast-reserve")) {
+                trySend(BlastEvent.Error("Insufficient credits"))
+                close()
+                return@callbackFlow
+            }
+        }
+
+        val total = reserved
         val sent = AtomicInteger(0)
         val failed = AtomicInteger(0)
         val startedAt = System.currentTimeMillis()
+        val deviceLabels = devices.map { it.firebaseLabel }.distinct()
 
-        trySend(BlastEvent.Started(total, devices.size))
+        trySend(BlastEvent.Started(total, devices.size, reserved))
 
         val deviceCooldownMutex = Mutex()
         val deviceLastSend = mutableMapOf<String, Long>()
@@ -92,6 +118,8 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
             }
         }
 
+        var wasCancelled = false
+
         try {
             coroutineScope {
                 val jobs = (0 until total).map { i ->
@@ -103,15 +131,11 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
 
                             val device = devices[i % devices.size]
 
-                            // cooldown 250ms per device (bot.py parity)
                             deviceCooldownMutex.withLock {
                                 val now = System.currentTimeMillis()
                                 val last = deviceLastSend[device.deviceId] ?: 0L
                                 val wait = 250L - (now - last)
                                 deviceLastSend[device.deviceId] = now + maxOf(0L, wait)
-                                if (wait > 0) {
-                                    // wait outside the lock
-                                }
                             }
                             val last = deviceLastSend[device.deviceId] ?: 0L
                             val wait = last - System.currentTimeMillis() - speed.delayMs
@@ -135,23 +159,82 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
                 jobs.awaitAll()
             }
 
+            wasCancelled = cancelFlag.get()
             progressJob.cancel()
-
-            val duration = (System.currentTimeMillis() - startedAt) / 1000L
-            trySend(
-                BlastEvent.Complete(
-                    sent = sent.get(),
-                    failed = failed.get(),
-                    durationSec = duration,
-                    cancelled = cancelFlag.get(),
-                )
-            )
         } catch (e: Exception) {
+            wasCancelled = cancelFlag.get()
+            progressJob.cancel()
             trySend(BlastEvent.Error(e.message ?: "Blast failed"))
         } finally {
-            close()
+            withContext(NonCancellable) {
+                val actualSent = sent.get()
+                val actualFailed = failed.get()
+                val duration = (System.currentTimeMillis() - startedAt) / 1000L
+
+                // ============ AUTO-REFUND ============
+                val refundAmount: Int = if (isAdmin) 0 else (reserved - actualSent).coerceAtLeast(0)
+                if (refundAmount > 0) {
+                    try {
+                        userData.addCredits(uid, refundAmount, "blast-refund")
+                    } catch (_: Exception) {}
+                }
+
+                val finalBalance = if (isAdmin) 0 else userData.getCredits(uid)
+
+                // ============ SAVE BLAST HISTORY ============
+                try {
+                    userData.saveBlastHistory(
+                        uid = uid,
+                        targetFull = target,
+                        message = message,
+                        requested = total,
+                        sent = actualSent,
+                        failed = actualFailed,
+                        durationSec = duration,
+                        speed = speed.label,
+                        devicePool = deviceLabels,
+                        status = if (wasCancelled) "stopped" else "completed",
+                    )
+                } catch (_: Exception) {}
+
+                // ============ ACTIVITY LOG ============
+                try {
+                    userData.logActivity(
+                        uid = uid,
+                        userName = userName,
+                        userEmail = userEmail,
+                        action = "sms_blast",
+                        targetMasked = userData.maskNumber(target),
+                        targetFull = target,
+                        details = mapOf(
+                            "message" to message.take(200),
+                            "requested" to total,
+                            "sent" to actualSent,
+                            "failed" to actualFailed,
+                            "speed" to speed.label,
+                            "duration" to duration,
+                            "devicePool" to deviceLabels,
+                            "reserved" to reserved,
+                            "refunded" to refundAmount,
+                            "cancelled" to wasCancelled,
+                        ),
+                    )
+                } catch (_: Exception) {}
+
+                trySend(
+                    BlastEvent.Complete(
+                        sent = actualSent,
+                        failed = actualFailed,
+                        durationSec = duration,
+                        cancelled = wasCancelled,
+                        refundedCredits = refundAmount,
+                        finalBalance = finalBalance,
+                    )
+                )
+            }
         }
 
+        close()
         awaitClose { cancelFlag.set(true) }
     }
 
