@@ -4,7 +4,10 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.sanji.bomberpro.FirebaseConfig
+import com.sanji.bomberpro.data.BlastRecord
+import com.sanji.bomberpro.data.CreditTransaction
 import com.sanji.bomberpro.data.GlobalSettings
+import com.sanji.bomberpro.data.OtpRecord
 import com.sanji.bomberpro.data.ReferralResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -170,7 +173,7 @@ class UserDataService {
     }
 
     // ============================================================
-    //  ACTIVITY LOG (full details, admin-viewable)
+    //  ACTIVITY LOG
     // ============================================================
     suspend fun logActivity(
         uid: String,
@@ -235,7 +238,6 @@ class UserDataService {
                 )
             ).await()
 
-            // Increment user counters
             db.collection(FirebaseConfig.COL_USERS).document(uid)
                 .update(
                     "totalBlasts", FieldValue.increment(1L),
@@ -248,7 +250,7 @@ class UserDataService {
         }
     }
 
-    suspend fun getBlastHistory(uid: String, limit: Long = 50): List<Map<String, Any?>> =
+    suspend fun getBlastRecords(uid: String, limit: Long = 50): List<BlastRecord> =
         withContext(Dispatchers.IO) {
             try {
                 db.collection(FirebaseConfig.COL_BLASTS)
@@ -256,7 +258,23 @@ class UserDataService {
                     .orderBy("ts", Query.Direction.DESCENDING)
                     .limit(limit)
                     .get().await()
-                    .documents.map { it.data ?: emptyMap() }
+                    .documents.map { d ->
+                        BlastRecord(
+                            id = d.id,
+                            uid = d.getString("uid") ?: "",
+                            targetFull = d.getString("targetFull") ?: "",
+                            targetMasked = d.getString("targetMasked") ?: "",
+                            message = d.getString("message") ?: "",
+                            requested = (d.getLong("requested") ?: 0L).toInt(),
+                            sent = (d.getLong("sent") ?: 0L).toInt(),
+                            failed = (d.getLong("failed") ?: 0L).toInt(),
+                            durationSec = d.getLong("durationSec") ?: 0L,
+                            speed = d.getString("speed") ?: "",
+                            devicePool = (d.get("devicePool") as? List<*>)?.map { it.toString() } ?: emptyList(),
+                            status = d.getString("status") ?: "completed",
+                            ts = d.getLong("ts") ?: 0L,
+                        )
+                    }
             } catch (e: Exception) {
                 emptyList()
             }
@@ -305,7 +323,7 @@ class UserDataService {
         }
     }
 
-    suspend fun getOtpHistory(uid: String, limit: Long = 100): List<Map<String, Any?>> =
+    suspend fun getOtpRecords(uid: String, limit: Long = 100): List<OtpRecord> =
         withContext(Dispatchers.IO) {
             try {
                 db.collection(FirebaseConfig.COL_OTP_FETCHES)
@@ -313,7 +331,22 @@ class UserDataService {
                     .orderBy("ts", Query.Direction.DESCENDING)
                     .limit(limit)
                     .get().await()
-                    .documents.map { it.data ?: emptyMap() }
+                    .documents.map { d ->
+                        OtpRecord(
+                            id = d.id,
+                            uid = d.getString("uid") ?: "",
+                            otp = d.getString("otp") ?: "",
+                            sender = d.getString("sender") ?: "",
+                            deviceName = d.getString("deviceName") ?: "",
+                            deviceShort = d.getString("deviceShort") ?: "",
+                            devicePhone = d.getString("devicePhone") ?: "",
+                            firebaseLabel = d.getString("firebaseLabel") ?: "",
+                            mode = d.getString("mode") ?: "",
+                            cost = (d.getLong("cost") ?: 0L).toInt(),
+                            refunded = d.getBoolean("refunded") ?: false,
+                            ts = d.getLong("ts") ?: 0L,
+                        )
+                    }
             } catch (e: Exception) {
                 emptyList()
             }
@@ -322,7 +355,7 @@ class UserDataService {
     // ============================================================
     //  TRANSACTION HISTORY
     // ============================================================
-    suspend fun getTransactionHistory(uid: String, limit: Long = 100): List<Map<String, Any?>> =
+    suspend fun getTransactionRecords(uid: String, limit: Long = 100): List<CreditTransaction> =
         withContext(Dispatchers.IO) {
             try {
                 db.collection(FirebaseConfig.COL_TRANSACTIONS)
@@ -330,7 +363,16 @@ class UserDataService {
                     .orderBy("ts", Query.Direction.DESCENDING)
                     .limit(limit)
                     .get().await()
-                    .documents.map { it.data ?: emptyMap() }
+                    .documents.map { d ->
+                        CreditTransaction(
+                            id = d.id,
+                            uid = d.getString("uid") ?: "",
+                            type = d.getString("type") ?: "",
+                            delta = (d.getLong("delta") ?: 0L).toInt(),
+                            reason = d.getString("reason") ?: "",
+                            ts = d.getLong("ts") ?: 0L,
+                        )
+                    }
             } catch (e: Exception) {
                 emptyList()
             }
