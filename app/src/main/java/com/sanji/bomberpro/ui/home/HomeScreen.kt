@@ -113,6 +113,7 @@ fun HomeScreen(
                     if (isAdmin) {
                         AdminScreen(
                             adminUid = user.uid,
+                            adminEmail = userEmail,
                             isOwner = isOwner,
                             onExit = { currentTab = HomeTab.HOME },
                         )
