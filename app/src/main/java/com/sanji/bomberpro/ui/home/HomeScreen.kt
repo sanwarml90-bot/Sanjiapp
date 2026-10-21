@@ -49,6 +49,7 @@ import com.sanji.bomberpro.data.UserProfile
 import com.sanji.bomberpro.data.UserRole
 import com.sanji.bomberpro.navigation.Routes
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.history.HistoryScreen
 import com.sanji.bomberpro.ui.otp.OtpScreen
 
 @Composable
@@ -86,8 +87,11 @@ fun HomeScreen(
                     isAdmin = role.priority >= UserRole.ADMIN.priority,
                     onBack = { currentTab = HomeTab.HOME },
                 )
-                HomeTab.HISTORY -> PlaceholderScreen("History", "Session 4 me full working")
-                HomeTab.WALLET -> PlaceholderScreen("Wallet", "Session 4 me full working")
+                HomeTab.HISTORY -> HistoryScreen(
+                    uid = user.uid,
+                    onBack = { currentTab = HomeTab.HOME },
+                )
+                HomeTab.WALLET -> PlaceholderScreen("Wallet", "Session 5 me full working")
             }
         }
     }
