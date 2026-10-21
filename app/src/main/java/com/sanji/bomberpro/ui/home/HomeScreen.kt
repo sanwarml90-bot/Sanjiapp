@@ -49,6 +49,7 @@ import com.sanji.bomberpro.data.UserProfile
 import com.sanji.bomberpro.data.UserRole
 import com.sanji.bomberpro.navigation.Routes
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.otp.OtpScreen
 
 @Composable
 fun HomeScreen(
@@ -78,8 +79,14 @@ fun HomeScreen(
                     onOpenHistory = { currentTab = HomeTab.HISTORY },
                 )
                 HomeTab.BLAST -> PlaceholderScreen("SMS Blast", "Tap START on home")
-                HomeTab.OTP -> PlaceholderScreen("OTP Manager", "Session 3 me full working")
-                HomeTab.HISTORY -> PlaceholderScreen("History", "Session 3 me full working")
+                HomeTab.OTP -> OtpScreen(
+                    uid = user.uid,
+                    userName = profile?.displayName ?: (user.displayName ?: "User"),
+                    userEmail = profile?.email ?: (user.email ?: ""),
+                    isAdmin = role.priority >= UserRole.ADMIN.priority,
+                    onBack = { currentTab = HomeTab.HOME },
+                )
+                HomeTab.HISTORY -> PlaceholderScreen("History", "Session 4 me full working")
                 HomeTab.WALLET -> PlaceholderScreen("Wallet", "Session 4 me full working")
             }
         }
