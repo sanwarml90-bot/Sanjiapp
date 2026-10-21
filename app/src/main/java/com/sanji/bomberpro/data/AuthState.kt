@@ -52,6 +52,8 @@ data class UserProfile(
     val role: String = "user",
     val credits: Int = 0,
     val coins: Int = 0,
+    val manualAddedCredits: Int = 0,
+    val manualAddedCoins: Int = 0,
     val subscriptionPlan: String = "free",
     val subscriptionExpiresAt: Long = 0L,
     val totalBlasts: Int = 0,
@@ -63,6 +65,18 @@ data class UserProfile(
     val banReason: String = "",
     val termsAccepted: Boolean = false,
     val termsAcceptedAt: Long = 0L,
+    val termsVersion: Int = 0,
+    val premium: Boolean = false,
     val createdAt: Long = 0L,
     val lastActive: Long = 0L,
-)
+) {
+    /**
+     * True if user needs to (re)accept terms.
+     * Compares stored version vs current global terms version.
+     */
+    fun needsTermsAcceptance(currentTermsVersion: Int, termsRequired: Boolean): Boolean {
+        if (!termsRequired) return false
+        if (!termsAccepted) return true
+        return termsVersion < currentTermsVersion
+    }
+}
