@@ -53,6 +53,7 @@ import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import com.sanji.bomberpro.ui.history.HistoryScreen
 import com.sanji.bomberpro.ui.otp.OtpScreen
+import com.sanji.bomberpro.ui.wallet.WalletScreen
 
 @Composable
 fun HomeScreen(
@@ -65,12 +66,9 @@ fun HomeScreen(
     val colors = LocalSanjiColors.current
     var currentTab by remember { mutableStateOf(HomeTab.HOME) }
 
-    // Live user doc
     var userMap by remember { mutableStateOf<Map<String, Any?>>(emptyMap()) }
     LaunchedEffect(user.uid) {
-        UserDocObserver.observeUserDoc(user.uid).collect {
-            userMap = it
-        }
+        UserDocObserver.observeUserDoc(user.uid).collect { userMap = it }
     }
 
     val liveCredits = (userMap["credits"] as? Number)?.toInt() ?: (profile?.credits ?: 0)
@@ -110,7 +108,10 @@ fun HomeScreen(
                     uid = user.uid,
                     onBack = { currentTab = HomeTab.HOME },
                 )
-                HomeTab.WALLET -> PlaceholderScreen("Wallet", "Session 5 me full working")
+                HomeTab.WALLET -> WalletScreen(
+                    uid = user.uid,
+                    onBack = { currentTab = HomeTab.HOME },
+                )
             }
         }
     }
@@ -138,10 +139,7 @@ private fun HomeTabContent(
             .verticalScroll(scrollState)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (profile?.photoUrl?.isNotBlank() == true) {
                 AsyncImage(
                     model = profile.photoUrl,
@@ -155,9 +153,8 @@ private fun HomeTabContent(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = (profile?.displayName?.firstOrNull() ?: 'U').toString(),
-                        fontWeight = FontWeight.Bold,
-                        color = colors.primary,
+                        (profile?.displayName?.firstOrNull() ?: 'U').toString(),
+                        fontWeight = FontWeight.Bold, color = colors.primary,
                     )
                 }
             }
@@ -166,11 +163,11 @@ private fun HomeTabContent(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = profile?.displayName ?: user.displayName ?: "User",
+                    profile?.displayName ?: user.displayName ?: "User",
                     fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
                 )
                 Text(
-                    text = role.name.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() },
+                    role.name.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() },
                     fontSize = 11.sp, color = colors.primary,
                 )
             }
