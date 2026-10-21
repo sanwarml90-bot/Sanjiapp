@@ -40,6 +40,9 @@ class AuthManager(private val context: Context) {
         }
     }
 
+    // ============================================================
+    //  OWNER CACHE
+    // ============================================================
     private suspend fun getOwnerEmail(): String {
         cachedOwnerEmail?.let { return it }
         try {
@@ -59,6 +62,15 @@ class AuthManager(private val context: Context) {
 
     fun invalidateOwnerCache() {
         cachedOwnerEmail = null
+    }
+
+    /**
+     * Call this after admin actions that may change the current user's role
+     * (e.g. transferOwnership, addRole self, etc.). Forces a fresh profile load.
+     */
+    fun refreshProfile() {
+        val u = auth.currentUser ?: return
+        scope.launch { loadProfileAndRole(u) }
     }
 
     // ============================================================
@@ -87,11 +99,21 @@ class AuthManager(private val context: Context) {
         val cleanEmail = email.trim().lowercase()
         return try {
             var user: FirebaseUser? = null
+
+            // try signin first
             try {
                 val result = auth.signInWithEmailAndPassword(cleanEmail, password).await()
                 user = result.user
             } catch (signInError: Exception) {
                 Log.w(TAG, "Sign-in failed, trying sign-up: ${signInError.message}")
+                // if password error -> fail clearly, don't try signup
+                val isInvalidCred = signInError.message?.contains("password is invalid", true) == true ||
+                        signInError.message?.contains("INVALID_LOGIN_CREDENTIALS", true) == true ||
+                        signInError.message?.contains("INVALID_PASSWORD", true) == true
+                if (isInvalidCred) {
+                    throw Exception("Wrong password for existing account")
+                }
+                // otherwise try signup
                 try {
                     val result = auth.createUserWithEmailAndPassword(cleanEmail, password).await()
                     user = result.user
@@ -100,6 +122,7 @@ class AuthManager(private val context: Context) {
                     throw signUpError
                 }
             }
+
             val finalUser = user ?: return Result.failure(Exception("No user returned"))
             ensureUserDoc(finalUser)
             loadProfileAndRole(finalUser)
@@ -107,6 +130,8 @@ class AuthManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Email auth failed", e)
             val friendly = when {
+                e.message?.contains("Wrong password", true) == true ->
+                    "Wrong password for existing account"
                 e.message?.contains("password is invalid", true) == true ||
                         e.message?.contains("INVALID_LOGIN_CREDENTIALS", true) == true ->
                     "Wrong password"
@@ -117,6 +142,8 @@ class AuthManager(private val context: Context) {
                     "Invalid email format"
                 e.message?.contains("network", true) == true ->
                     "Network error — try again"
+                e.message?.contains("too many requests", true) == true ->
+                    "Too many attempts — wait a minute"
                 else -> e.message ?: "Login failed"
             }
             _authState.value = AuthState.Error(friendly, e)
@@ -125,7 +152,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  USER DOC CREATION
+    //  USER DOC CREATION / UPDATE
     // ============================================================
     private suspend fun ensureUserDoc(user: FirebaseUser) {
         try {
@@ -148,6 +175,8 @@ class AuthManager(private val context: Context) {
                         "role" to role,
                         "credits" to 0,
                         "coins" to 0,
+                        "manualAddedCredits" to 0,
+                        "manualAddedCoins" to 0,
                         "subscription" to mapOf(
                             "plan" to "free",
                             "expiresAt" to 0L,
@@ -164,6 +193,8 @@ class AuthManager(private val context: Context) {
                         "banReason" to "",
                         "termsAccepted" to false,
                         "termsAcceptedAt" to 0L,
+                        "termsVersion" to 0,
+                        "premium" to false,
                         "createdAt" to nowSec(),
                         "lastActive" to nowSec(),
                     )
@@ -201,7 +232,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  LOAD PROFILE + ROLE
+    //  LOAD PROFILE + ROLE + TERMS STATE
     // ============================================================
     private suspend fun loadProfileAndRole(user: FirebaseUser) {
         try {
@@ -243,6 +274,8 @@ class AuthManager(private val context: Context) {
                         role = profileDoc.getString("role") ?: "user",
                         credits = (profileDoc.getLong("credits") ?: 0L).toInt(),
                         coins = (profileDoc.getLong("coins") ?: 0L).toInt(),
+                        manualAddedCredits = (profileDoc.getLong("manualAddedCredits") ?: 0L).toInt(),
+                        manualAddedCoins = (profileDoc.getLong("manualAddedCoins") ?: 0L).toInt(),
                         subscriptionPlan = (sub["plan"] as? String) ?: "free",
                         subscriptionExpiresAt = (sub["expiresAt"] as? Number)?.toLong() ?: 0L,
                         totalBlasts = (profileDoc.getLong("totalBlasts") ?: 0L).toInt(),
@@ -254,11 +287,13 @@ class AuthManager(private val context: Context) {
                         banReason = profileDoc.getString("banReason") ?: "",
                         termsAccepted = profileDoc.getBoolean("termsAccepted") ?: false,
                         termsAcceptedAt = profileDoc.getLong("termsAcceptedAt") ?: 0L,
+                        termsVersion = (profileDoc.getLong("termsVersion") ?: 0L).toInt(),
+                        premium = profileDoc.getBoolean("premium") ?: false,
                         createdAt = profileDoc.getLong("createdAt") ?: 0L,
                         lastActive = profileDoc.getLong("lastActive") ?: 0L,
                     )
 
-                    // Sync role if changed (transfer ownership case)
+                    // sync role if changed (e.g. transfer ownership)
                     val storedRole = profileDoc.getString("role") ?: "user"
                     val computedRole = when (role) {
                         UserRole.OWNER -> "owner"
@@ -284,11 +319,39 @@ class AuthManager(private val context: Context) {
         }
     }
 
+    // ============================================================
+    //  TERMS ACCEPTANCE
+    // ============================================================
+    suspend fun acceptTerms(version: Int): Boolean {
+        val user = auth.currentUser ?: return false
+        return try {
+            db.collection(FirebaseConfig.COL_USERS).document(user.uid)
+                .update(
+                    mapOf(
+                        "termsAccepted" to true,
+                        "termsAcceptedAt" to nowSec(),
+                        "termsVersion" to version.toLong(),
+                    )
+                ).await()
+            loadProfileAndRole(user)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "acceptTerms failed", e)
+            false
+        }
+    }
+
+    // ============================================================
+    //  SIGN OUT
+    // ============================================================
     fun signOut() {
         auth.signOut()
         _authState.value = AuthState.LoggedOut
     }
 
+    // ============================================================
+    //  HELPERS
+    // ============================================================
     private fun generateReferCode(uid: String): String {
         val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         var seed = uid.hashCode().toLong() and 0x7FFFFFFF
