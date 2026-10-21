@@ -24,6 +24,7 @@ sealed class BlastEvent {
         val total: Int,
         val devices: Int,
         val reservedCredits: Int,
+        val powerMode: Int,
     ) : BlastEvent()
 
     data class Progress(
@@ -53,6 +54,11 @@ enum class BlastSpeed(val delayMs: Long, val label: String) {
 
 class BlastExecutor(private val rtdb: RealtimeDbService) {
 
+    /**
+     * @param count   base number of sends requested by user
+     * @param power   power multiplier (2, 3, 4, 5, 10)
+     * @param threads max concurrent sends (default 20)
+     */
     fun execute(
         uid: String,
         isAdmin: Boolean,
@@ -63,6 +69,7 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
         target: String,
         message: String,
         count: Int,
+        power: Int,
         threads: Int,
         speed: BlastSpeed,
         cancelFlag: AtomicBoolean,
@@ -78,8 +85,19 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
             return@callbackFlow
         }
 
-        // ----------------- RESERVE CREDITS -----------------
-        val reserved: Int = if (isAdmin) count else minOf(count, userData.getCredits(uid))
+        // -----------------------------------------------------------
+        //  total = count × power  (matches bot behavior)
+        // -----------------------------------------------------------
+        val desiredTotal = count * power
+        val deviceCapacity = devices.size * power
+        val effectiveTotal = min(desiredTotal, deviceCapacity)
+
+        // -----------------------------------------------------------
+        //  reserve credits upfront = min(effectiveTotal, user credits)
+        // -----------------------------------------------------------
+        val reserved: Int = if (isAdmin) effectiveTotal
+        else minOf(effectiveTotal, userData.getCredits(uid))
+
         if (!isAdmin) {
             if (reserved <= 0) {
                 trySend(BlastEvent.Error("No credits available"))
@@ -99,10 +117,14 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
         val startedAt = System.currentTimeMillis()
         val deviceLabels = devices.map { it.firebaseLabel }.distinct()
 
-        trySend(BlastEvent.Started(total, devices.size, reserved))
+        trySend(BlastEvent.Started(total, devices.size, reserved, power))
 
+        // -----------------------------------------------------------
+        //  per-device cooldown protected by mutex
+        // -----------------------------------------------------------
         val deviceCooldownMutex = Mutex()
         val deviceLastSend = mutableMapOf<String, Long>()
+        val perDeviceMinGapMs = 250L
 
         val semaphore = Semaphore(min(threads.coerceAtLeast(1), devices.size))
 
@@ -122,26 +144,38 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
 
         try {
             coroutineScope {
+                // build job list of `total` sends
+                // pass_num = index / devices.size  → determines which SIM to use
+                //              and gives natural rotation
                 val jobs = (0 until total).map { i ->
                     async {
-                        if (cancelFlag.get() || sent.get() + failed.get() >= total) return@async
+                        if (cancelFlag.get()) return@async
 
                         semaphore.withPermit {
                             if (cancelFlag.get()) return@withPermit
+                            if (sent.get() + failed.get() >= total) return@withPermit
 
                             val device = devices[i % devices.size]
+                            val passNum = i / devices.size
 
-                            deviceCooldownMutex.withLock {
+                            // cooldown read+write inside lock
+                            val waitMs = deviceCooldownMutex.withLock {
                                 val now = System.currentTimeMillis()
                                 val last = deviceLastSend[device.deviceId] ?: 0L
-                                val wait = 250L - (now - last)
-                                deviceLastSend[device.deviceId] = now + maxOf(0L, wait)
+                                val wait = perDeviceMinGapMs - (now - last)
+                                if (wait > 0) {
+                                    deviceLastSend[device.deviceId] = now + wait
+                                    wait
+                                } else {
+                                    deviceLastSend[device.deviceId] = now
+                                    0L
+                                }
                             }
-                            val last = deviceLastSend[device.deviceId] ?: 0L
-                            val wait = last - System.currentTimeMillis() - speed.delayMs
-                            if (wait > 0) delay(wait)
+                            if (waitMs > 0) delay(waitMs)
 
-                            val sim = firstSimSlot(device)
+                            // SIM rotation (bot parity)
+                            val sim = simSlotFor(device, passNum)
+
                             val result = rtdb.sendSms(
                                 firebaseUrl = device.firebaseUrl,
                                 deviceId = device.deviceId,
@@ -171,7 +205,11 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
                 val actualFailed = failed.get()
                 val duration = (System.currentTimeMillis() - startedAt) / 1000L
 
-                // ============ AUTO-REFUND ============
+                // ------------------------------------------------
+                //  REFUND
+                //  reserved credits were deducted upfront.
+                //  Anything not sent (failed OR cancelled) is refunded.
+                // ------------------------------------------------
                 val refundAmount: Int = if (isAdmin) 0 else (reserved - actualSent).coerceAtLeast(0)
                 if (refundAmount > 0) {
                     try {
@@ -181,7 +219,9 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
 
                 val finalBalance = if (isAdmin) 0 else userData.getCredits(uid)
 
-                // ============ SAVE BLAST HISTORY ============
+                // ------------------------------------------------
+                //  SAVE HISTORY
+                // ------------------------------------------------
                 try {
                     userData.saveBlastHistory(
                         uid = uid,
@@ -191,13 +231,15 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
                         sent = actualSent,
                         failed = actualFailed,
                         durationSec = duration,
-                        speed = speed.label,
+                        speed = "${speed.label} ${power}x",
                         devicePool = deviceLabels,
                         status = if (wasCancelled) "stopped" else "completed",
                     )
                 } catch (_: Exception) {}
 
-                // ============ ACTIVITY LOG ============
+                // ------------------------------------------------
+                //  ACTIVITY LOG
+                // ------------------------------------------------
                 try {
                     userData.logActivity(
                         uid = uid,
@@ -212,6 +254,7 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
                             "sent" to actualSent,
                             "failed" to actualFailed,
                             "speed" to speed.label,
+                            "power" to power,
                             "duration" to duration,
                             "devicePool" to deviceLabels,
                             "reserved" to reserved,
@@ -238,8 +281,14 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
         awaitClose { cancelFlag.set(true) }
     }
 
-    private fun firstSimSlot(device: Device): Int {
-        val first = device.sims.firstOrNull() ?: return 0
+    /**
+     * Choose SIM slot for this pass.
+     * Bot rotates sims[passNum % len(sims)].
+     */
+    private fun simSlotFor(device: Device, passNum: Int): Int {
+        if (device.sims.isEmpty()) return 0
+        val idx = passNum % device.sims.size
+        val first = device.sims[idx]
         return (first["simSlotIndex"] as? Int) ?: 0
     }
 }
