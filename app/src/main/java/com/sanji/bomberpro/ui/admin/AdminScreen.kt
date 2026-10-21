@@ -36,6 +36,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,6 +56,7 @@ import com.sanji.bomberpro.services.AdminService
 import com.sanji.bomberpro.services.AdminUser
 import com.sanji.bomberpro.services.SettingsService
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class AdminView {
@@ -89,6 +91,11 @@ fun AdminScreen(
     var selectedUser by remember { mutableStateOf<AdminUser?>(null) }
 
     var error by remember { mutableStateOf<String?>(null) }
+    var success by remember { mutableStateOf<String?>(null) }
+
+    // bulk add / deduct dialogs
+    var showBulkAdd by remember { mutableStateOf(false) }
+    var showBulkDeduct by remember { mutableStateOf(false) }
 
     fun loadFirebases() {
         scope.launch {
@@ -98,11 +105,25 @@ fun AdminScreen(
         }
     }
 
-    fun loadUsers() {
-        scope.launch {
-            loadingUsers = true
-            users = adminService.searchUsers(userQuery)
-            loadingUsers = false
+    // load users on query change (debounced)
+    LaunchedEffect(userQuery) {
+        delay(350)
+        loadingUsers = true
+        users = adminService.searchUsers(userQuery)
+        loadingUsers = false
+    }
+
+    // cancel error/success after a while
+    LaunchedEffect(error) {
+        if (error != null) {
+            delay(4000)
+            error = null
+        }
+    }
+    LaunchedEffect(success) {
+        if (success != null) {
+            delay(4000)
+            success = null
         }
     }
 
@@ -110,7 +131,7 @@ fun AdminScreen(
         AdminView.HOME -> AdminHomeMenu(
             isOwner = isOwner,
             onOpenFirebase = { loadFirebases(); view = AdminView.FIREBASE },
-            onOpenUsers = { loadUsers(); view = AdminView.USERS },
+            onOpenUsers = { view = AdminView.USERS },
             onOpenRoles = { view = AdminView.ROLES },
             onOpenSettings = { view = AdminView.SETTINGS },
             onOpenBroadcast = { view = AdminView.BROADCAST },
@@ -118,6 +139,8 @@ fun AdminScreen(
             onOpenPricing = { view = AdminView.PRICING },
             onOpenLogs = { view = AdminView.LOGS },
             onOpenAnalytics = { view = AdminView.ANALYTICS },
+            onOpenBulkAdd = { showBulkAdd = true },
+            onOpenBulkDeduct = { showBulkDeduct = true },
             onExit = onExit,
         )
 
@@ -236,7 +259,13 @@ fun AdminScreen(
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                     color = colors.onBackground, modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = { loadUsers() }) {
+                IconButton(onClick = {
+                    scope.launch {
+                        loadingUsers = true
+                        users = adminService.searchUsers(userQuery)
+                        loadingUsers = false
+                    }
+                }) {
                     Icon(Icons.Default.Refresh, "Refresh", tint = colors.primary)
                 }
             }
@@ -245,7 +274,7 @@ fun AdminScreen(
 
             OutlinedTextField(
                 value = userQuery,
-                onValueChange = { userQuery = it; loadUsers() },
+                onValueChange = { userQuery = it },
                 leadingIcon = { Icon(Icons.Default.Search, null, tint = colors.onSurfaceVariant) },
                 placeholder = { Text("Search by name / email / uid") },
                 singleLine = true,
@@ -283,6 +312,10 @@ fun AdminScreen(
                                             Spacer(Modifier.width(6.dp))
                                             Text("🚫", fontSize = 12.sp)
                                         }
+                                        if (u.premium) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("💎", fontSize = 12.sp)
+                                        }
                                         if (u.role != "user") {
                                             Spacer(Modifier.width(6.dp))
                                             Text(
@@ -312,30 +345,47 @@ fun AdminScreen(
 
         AdminView.USER_DETAIL -> {
             val u = selectedUser
-            if (u == null) view = AdminView.USERS
-            else UserDetailSection(
-                user = u,
-                adminUid = adminUid,
-                isOwner = isOwner,
-                service = adminService,
-                onBack = { view = AdminView.USERS },
-                onRefresh = {
-                    scope.launch {
-                        val fresh = adminService.getUserDetail(u.uid)
-                        if (fresh != null) selectedUser = fresh
-                    }
-                },
-            )
+            if (u == null) {
+                LaunchedEffect(Unit) { view = AdminView.USERS }
+            } else {
+                UserDetailSection(
+                    user = u,
+                    adminUid = adminUid,
+                    isOwner = isOwner,
+                    service = adminService,
+                    onBack = { view = AdminView.USERS },
+                    onRefresh = {
+                        scope.launch {
+                            val fresh = adminService.getUserDetail(u.uid)
+                            if (fresh != null) selectedUser = fresh
+                        }
+                    },
+                )
+            }
         }
 
         AdminView.ROLES -> {
-            if (isOwner) RolesScreen(adminUid = adminUid, adminEmail = adminEmail, service = adminService, onBack = { view = AdminView.HOME })
-            else view = AdminView.HOME
+            if (isOwner) {
+                RolesScreen(
+                    adminUid = adminUid,
+                    adminEmail = adminEmail,
+                    service = adminService,
+                    onBack = { view = AdminView.HOME },
+                )
+            } else {
+                LaunchedEffect(Unit) { view = AdminView.HOME }
+            }
         }
 
         AdminView.SETTINGS -> {
-            if (isOwner) SettingsScreen(onBack = { view = AdminView.HOME }, service = settingsService)
-            else view = AdminView.HOME
+            if (isOwner) {
+                SettingsScreen(
+                    onBack = { view = AdminView.HOME },
+                    service = settingsService,
+                )
+            } else {
+                LaunchedEffect(Unit) { view = AdminView.HOME }
+            }
         }
 
         AdminView.BROADCAST -> BroadcastScreen(
@@ -352,13 +402,77 @@ fun AdminScreen(
         )
 
         AdminView.PRICING -> {
-            if (isOwner) PricingScreen(service = settingsService, onBack = { view = AdminView.HOME })
-            else view = AdminView.HOME
+            if (isOwner) {
+                PricingScreen(
+                    service = settingsService,
+                    onBack = { view = AdminView.HOME },
+                )
+            } else {
+                LaunchedEffect(Unit) { view = AdminView.HOME }
+            }
         }
 
         AdminView.LOGS -> LogsScreen(onBack = { view = AdminView.HOME })
 
         AdminView.ANALYTICS -> AnalyticsScreen(onBack = { view = AdminView.HOME })
+    }
+
+    // global dialogs
+    if (showBulkAdd) {
+        BulkAmountDialog(
+            title = "Add credits to ALL users",
+            subtitle = "Adds to every user's credits + manual pool",
+            onDismiss = { showBulkAdd = false },
+            onConfirm = { amount ->
+                scope.launch {
+                    val result = adminService.addCreditsToAll(amount, adminUid)
+                    showBulkAdd = false
+                    if (result.isSuccess) {
+                        success = "+$amount credits → ${result.getOrNull()} users"
+                    } else {
+                        error = result.exceptionOrNull()?.message ?: "Failed"
+                    }
+                }
+            },
+        )
+    }
+    if (showBulkDeduct) {
+        BulkAmountDialog(
+            title = "Deduct credits from ALL users",
+            subtitle = "Only cuts from admin-granted (manual) pool. Purchased credits untouched.",
+            onDismiss = { showBulkDeduct = false },
+            onConfirm = { amount ->
+                scope.launch {
+                    val result = adminService.deductCreditsFromAll(amount, adminUid)
+                    showBulkDeduct = false
+                    if (result.isSuccess) {
+                        success = "-$amount credits from ${result.getOrNull()} users"
+                    } else {
+                        error = result.exceptionOrNull()?.message ?: "Failed"
+                    }
+                }
+            },
+        )
+    }
+
+    // toast layer
+    if (error != null || success != null) {
+        Box(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = if (error != null) colors.error.copy(alpha = 0.95f) else colors.success.copy(alpha = 0.95f),
+            ) {
+                Text(
+                    error ?: success ?: "",
+                    fontSize = 12.sp,
+                    color = Color.White,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
+        }
     }
 }
 
@@ -374,6 +488,8 @@ private fun AdminHomeMenu(
     onOpenPricing: () -> Unit,
     onOpenLogs: () -> Unit,
     onOpenAnalytics: () -> Unit,
+    onOpenBulkAdd: () -> Unit,
+    onOpenBulkDeduct: () -> Unit,
     onExit: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
@@ -410,10 +526,12 @@ private fun AdminHomeMenu(
         }
         AdminMenuCard("📜", "Logs", "Activity · Audit · Payment history", onOpenLogs)
         AdminMenuCard("📊", "Analytics", "Users · Revenue · Daily stats", onOpenAnalytics)
+        AdminMenuCard("💰", "Bulk Add Credits", "Add credits to every user at once", onOpenBulkAdd)
+        AdminMenuCard("💸", "Bulk Deduct Credits", "Deduct from manual pool only · purchased credits untouched", onOpenBulkDeduct)
 
         Spacer(Modifier.height(24.dp))
         Text(
-            "More coming: Giveaways · Support tickets · Appeals",
+            "Giveaways · Support tickets · Appeals coming in next updates",
             fontSize = 10.sp, color = colors.onSurfaceVariant,
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
         )
@@ -493,6 +611,49 @@ private fun AddFirebaseDialog(
                     Spacer(Modifier.height(8.dp))
                     Text(error, color = colors.error, fontSize = 11.sp)
                 }
+            }
+        },
+    )
+}
+
+@Composable
+private fun BulkAmountDialog(
+    title: String,
+    subtitle: String,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    var text by remember { mutableStateOf("") }
+    val amount = text.toIntOrNull() ?: 0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                onClick = { if (amount > 0) onConfirm(amount) },
+                enabled = amount > 0,
+            ) { Text("Confirm", color = colors.primary, fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = colors.onSurfaceVariant) }
+        },
+        containerColor = colors.surface,
+        titleContentColor = colors.onBackground,
+        textContentColor = colors.onBackground,
+        title = { Text(title) },
+        text = {
+            Column {
+                Text(subtitle, fontSize = 11.sp, color = colors.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it.filter { c -> c.isDigit() } },
+                    label = { Text("Amount") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         },
     )
