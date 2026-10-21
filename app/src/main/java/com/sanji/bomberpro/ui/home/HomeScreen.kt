@@ -13,12 +13,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MonetizationOn
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -49,6 +51,7 @@ import com.sanji.bomberpro.data.AuthManager
 import com.sanji.bomberpro.data.UserProfile
 import com.sanji.bomberpro.data.UserRole
 import com.sanji.bomberpro.navigation.Routes
+import com.sanji.bomberpro.services.NotificationsService
 import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import com.sanji.bomberpro.ui.admin.AdminScreen
@@ -73,6 +76,11 @@ fun HomeScreen(
     var userMap by remember { mutableStateOf<Map<String, Any?>>(emptyMap()) }
     LaunchedEffect(user.uid) {
         UserDocObserver.observeUserDoc(user.uid).collect { userMap = it }
+    }
+
+    var unreadNotifications by remember { mutableStateOf(0) }
+    LaunchedEffect(user.uid) {
+        NotificationsService().unreadCountFlow(user.uid).collect { unreadNotifications = it }
     }
 
     val liveCredits = (userMap["credits"] as? Number)?.toInt() ?: (profile?.credits ?: 0)
@@ -103,24 +111,22 @@ fun HomeScreen(
                     liveCoins = liveCoins,
                     liveTotalSms = liveTotalSms,
                     liveTotalOtps = liveTotalOtps,
+                    unreadNotifications = unreadNotifications,
                     onStartBlast = { onNavigate(Routes.SMS_BLAST) },
                     onOpenWallet = { currentTab = HomeTab.WALLET },
                     onOpenHistory = { currentTab = HomeTab.HISTORY },
                     onOpenRefer = { onNavigate(Routes.REFER) },
+                    onOpenNotifications = { onNavigate(Routes.NOTIFICATIONS) },
                 )
                 HomeTab.BLAST -> PlaceholderScreen("SMS Blast", "Tap START on home")
                 HomeTab.ADMIN -> {
-                    if (isAdmin) {
-                        AdminScreen(
-                            adminUid = user.uid,
-                            adminEmail = userEmail,
-                            adminName = userName,
-                            isOwner = isOwner,
-                            onExit = { currentTab = HomeTab.HOME },
-                        )
-                    } else {
-                        PlaceholderScreen("Not Authorized", "")
-                    }
+                    if (isAdmin) AdminScreen(
+                        adminUid = user.uid,
+                        adminEmail = userEmail,
+                        adminName = userName,
+                        isOwner = isOwner,
+                        onExit = { currentTab = HomeTab.HOME },
+                    ) else PlaceholderScreen("Not Authorized", "")
                 }
                 HomeTab.OTP -> OtpScreen(
                     uid = user.uid,
@@ -129,10 +135,7 @@ fun HomeScreen(
                     isAdmin = isAdmin,
                     onBack = { currentTab = HomeTab.HOME },
                 )
-                HomeTab.HISTORY -> HistoryScreen(
-                    uid = user.uid,
-                    onBack = { currentTab = HomeTab.HOME },
-                )
+                HomeTab.HISTORY -> HistoryScreen(uid = user.uid, onBack = { currentTab = HomeTab.HOME })
                 HomeTab.WALLET -> WalletScreen(
                     uid = user.uid,
                     userName = userName,
@@ -153,10 +156,12 @@ private fun HomeTabContent(
     liveCoins: Int,
     liveTotalSms: Int,
     liveTotalOtps: Int,
+    unreadNotifications: Int,
     onStartBlast: () -> Unit,
     onOpenWallet: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenRefer: () -> Unit,
+    onOpenNotifications: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
     val scrollState = rememberScrollState()
@@ -199,6 +204,40 @@ private fun HomeTabContent(
                     fontSize = 11.sp, color = colors.primary,
                 )
             }
+
+            // Notifications bell
+            Box(modifier = Modifier.size(42.dp)) {
+                Surface(
+                    onClick = onOpenNotifications,
+                    shape = CircleShape,
+                    color = colors.surface,
+                    modifier = Modifier.size(42.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.Notifications, "Notifications",
+                            tint = colors.onBackground, modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                if (unreadNotifications > 0) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .size(18.dp)
+                            .clip(CircleShape)
+                            .background(colors.error),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (unreadNotifications > 9) "9+" else "$unreadNotifications",
+                            fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.width(8.dp))
 
             Surface(
                 shape = RoundedCornerShape(20.dp),
