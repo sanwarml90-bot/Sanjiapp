@@ -29,6 +29,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +49,7 @@ import com.sanji.bomberpro.data.AuthManager
 import com.sanji.bomberpro.data.UserProfile
 import com.sanji.bomberpro.data.UserRole
 import com.sanji.bomberpro.navigation.Routes
+import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import com.sanji.bomberpro.ui.history.HistoryScreen
 import com.sanji.bomberpro.ui.otp.OtpScreen
@@ -63,6 +65,19 @@ fun HomeScreen(
     val colors = LocalSanjiColors.current
     var currentTab by remember { mutableStateOf(HomeTab.HOME) }
 
+    // Live user doc
+    var userMap by remember { mutableStateOf<Map<String, Any?>>(emptyMap()) }
+    LaunchedEffect(user.uid) {
+        UserDocObserver.observeUserDoc(user.uid).collect {
+            userMap = it
+        }
+    }
+
+    val liveCredits = (userMap["credits"] as? Number)?.toInt() ?: (profile?.credits ?: 0)
+    val liveCoins = (userMap["coins"] as? Number)?.toInt() ?: (profile?.coins ?: 0)
+    val liveTotalSms = (userMap["totalSms"] as? Number)?.toInt() ?: (profile?.totalSms ?: 0)
+    val liveTotalOtps = (userMap["totalOtps"] as? Number)?.toInt() ?: (profile?.totalOtps ?: 0)
+
     Scaffold(
         containerColor = colors.background,
         bottomBar = {
@@ -75,6 +90,10 @@ fun HomeScreen(
                     user = user,
                     role = role,
                     profile = profile,
+                    liveCredits = liveCredits,
+                    liveCoins = liveCoins,
+                    liveTotalSms = liveTotalSms,
+                    liveTotalOtps = liveTotalOtps,
                     onStartBlast = { onNavigate(Routes.SMS_BLAST) },
                     onOpenWallet = { currentTab = HomeTab.WALLET },
                     onOpenHistory = { currentTab = HomeTab.HISTORY },
@@ -102,6 +121,10 @@ private fun HomeTabContent(
     user: FirebaseUser,
     role: UserRole,
     profile: UserProfile?,
+    liveCredits: Int,
+    liveCoins: Int,
+    liveTotalSms: Int,
+    liveTotalOtps: Int,
     onStartBlast: () -> Unit,
     onOpenWallet: () -> Unit,
     onOpenHistory: () -> Unit,
@@ -123,16 +146,11 @@ private fun HomeTabContent(
                 AsyncImage(
                     model = profile.photoUrl,
                     contentDescription = null,
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(colors.surface),
+                    modifier = Modifier.size(42.dp).clip(RoundedCornerShape(50)).background(colors.surface),
                 )
             } else {
                 Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(RoundedCornerShape(50))
+                    modifier = Modifier.size(42.dp).clip(RoundedCornerShape(50))
                         .background(colors.primary.copy(alpha = 0.2f)),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -149,16 +167,11 @@ private fun HomeTabContent(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = profile?.displayName ?: user.displayName ?: "User",
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colors.onBackground,
+                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
                 )
                 Text(
-                    text = role.name.replace('_', ' ')
-                        .lowercase()
-                        .replaceFirstChar { it.uppercase() },
-                    fontSize = 11.sp,
-                    color = colors.primary,
+                    text = role.name.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() },
+                    fontSize = 11.sp, color = colors.primary,
                 )
             }
 
@@ -171,19 +184,9 @@ private fun HomeTabContent(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
-                        Icons.Default.MonetizationOn,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = colors.primary,
-                    )
+                    Icon(Icons.Default.MonetizationOn, null, modifier = Modifier.size(16.dp), tint = colors.primary)
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = "${profile?.credits ?: 0}",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colors.primary,
-                    )
+                    Text("$liveCredits", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
                 }
             }
         }
@@ -192,174 +195,71 @@ private fun HomeTabContent(
 
         Surface(
             onClick = onStartBlast,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(130.dp),
+            modifier = Modifier.fillMaxWidth().height(130.dp),
             shape = RoundedCornerShape(24.dp),
             color = Color.Transparent,
         ) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(colors.primary, colors.secondary)
-                        )
-                    ),
+                modifier = Modifier.fillMaxSize()
+                    .background(Brush.linearGradient(colors = listOf(colors.primary, colors.secondary))),
                 contentAlignment = Alignment.Center,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.RocketLaunch,
-                        contentDescription = null,
-                        modifier = Modifier.size(38.dp),
-                        tint = Color.Black,
-                    )
+                    Icon(Icons.Default.RocketLaunch, null, modifier = Modifier.size(38.dp), tint = Color.Black)
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "START SMS BLAST",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Black,
-                        color = Color.Black,
-                    )
-                    Text(
-                        text = "Tap to launch",
-                        fontSize = 11.sp,
-                        color = Color.Black.copy(alpha = 0.7f),
-                    )
+                    Text("START SMS BLAST", fontSize = 18.sp, fontWeight = FontWeight.Black, color = Color.Black)
+                    Text("Tap to launch", fontSize = 11.sp, color = Color.Black.copy(alpha = 0.7f))
                 }
             }
         }
 
         Spacer(Modifier.height(24.dp))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            StatCard(
-                icon = Icons.Default.Send,
-                label = "Total SMS",
-                value = "${profile?.totalSms ?: 0}",
-                modifier = Modifier.weight(1f),
-            )
-            StatCard(
-                icon = Icons.Default.VpnKey,
-                label = "OTPs",
-                value = "${profile?.totalOtps ?: 0}",
-                modifier = Modifier.weight(1f),
-            )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            StatCard(Icons.Default.Send, "Total SMS", "$liveTotalSms", Modifier.weight(1f))
+            StatCard(Icons.Default.VpnKey, "OTPs", "$liveTotalOtps", Modifier.weight(1f))
         }
-
         Spacer(Modifier.height(12.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            StatCard(
-                icon = Icons.Default.MonetizationOn,
-                label = "Credits",
-                value = "${profile?.credits ?: 0}",
-                modifier = Modifier.weight(1f),
-            )
-            StatCard(
-                icon = Icons.Default.Toll,
-                label = "Coins",
-                value = "${profile?.coins ?: 0}",
-                modifier = Modifier.weight(1f),
-            )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            StatCard(Icons.Default.MonetizationOn, "Credits", "$liveCredits", Modifier.weight(1f))
+            StatCard(Icons.Default.Toll, "Coins", "$liveCoins", Modifier.weight(1f))
         }
 
         Spacer(Modifier.height(24.dp))
 
-        Text(
-            text = "Quick Access",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = colors.onBackground,
-        )
+        Text("Quick Access", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
         Spacer(Modifier.height(8.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            QuickAccessChip(
-                Icons.Default.History,
-                "History",
-                onClick = onOpenHistory,
-                modifier = Modifier.weight(1f),
-            )
-            QuickAccessChip(
-                Icons.Default.CardGiftcard,
-                "Refer",
-                onClick = { },
-                modifier = Modifier.weight(1f),
-            )
-            QuickAccessChip(
-                Icons.Default.Settings,
-                "Settings",
-                onClick = { },
-                modifier = Modifier.weight(1f),
-            )
+            QuickAccessChip(Icons.Default.History, "History", onOpenHistory, Modifier.weight(1f))
+            QuickAccessChip(Icons.Default.CardGiftcard, "Refer", { }, Modifier.weight(1f))
+            QuickAccessChip(Icons.Default.Settings, "Settings", { }, Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-private fun StatCard(
-    icon: ImageVector,
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-) {
+private fun StatCard(icon: ImageVector, label: String, value: String, modifier: Modifier = Modifier) {
     val colors = LocalSanjiColors.current
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
-        color = colors.surface,
-    ) {
+    Surface(modifier = modifier, shape = RoundedCornerShape(16.dp), color = colors.surface) {
         Column(modifier = Modifier.padding(14.dp)) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = colors.primary,
-                modifier = Modifier.size(20.dp),
-            )
+            Icon(icon, null, tint = colors.primary, modifier = Modifier.size(20.dp))
             Spacer(Modifier.height(10.dp))
-            Text(
-                text = value,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = colors.onBackground,
-            )
-            Text(text = label, fontSize = 11.sp, color = colors.onSurfaceVariant)
+            Text(value, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+            Text(label, fontSize = 11.sp, color = colors.onSurfaceVariant)
         }
     }
 }
 
 @Composable
-private fun QuickAccessChip(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
+private fun QuickAccessChip(icon: ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val colors = LocalSanjiColors.current
-    Surface(
-        modifier = modifier,
-        onClick = onClick,
-        shape = RoundedCornerShape(14.dp),
-        color = colors.surface,
-    ) {
+    Surface(modifier = modifier, onClick = onClick, shape = RoundedCornerShape(14.dp), color = colors.surface) {
         Column(
             modifier = Modifier.padding(vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = colors.primary,
-                modifier = Modifier.size(20.dp),
-            )
+            Icon(icon, null, tint = colors.primary, modifier = Modifier.size(20.dp))
             Spacer(Modifier.height(6.dp))
             Text(label, fontSize = 11.sp, color = colors.onBackground)
         }
@@ -370,18 +270,11 @@ private fun QuickAccessChip(
 private fun PlaceholderScreen(title: String, subtitle: String) {
     val colors = LocalSanjiColors.current
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(colors.background),
+        modifier = Modifier.fillMaxSize().background(colors.background),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                title,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = colors.onBackground,
-            )
+            Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
             Spacer(Modifier.height(8.dp))
             Text(subtitle, fontSize = 13.sp, color = colors.onSurfaceVariant)
         }
