@@ -24,8 +24,10 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Toll
 import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -35,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,9 +58,11 @@ import com.sanji.bomberpro.services.NotificationsService
 import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import com.sanji.bomberpro.ui.admin.AdminScreen
+import com.sanji.bomberpro.ui.blast.SmsBlastScreen
 import com.sanji.bomberpro.ui.history.HistoryScreen
 import com.sanji.bomberpro.ui.otp.OtpScreen
 import com.sanji.bomberpro.ui.wallet.WalletScreen
+import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
@@ -68,6 +73,7 @@ fun HomeScreen(
     onNavigate: (String) -> Unit,
 ) {
     val colors = LocalSanjiColors.current
+    val scope = rememberCoroutineScope()
     var currentTab by remember { mutableStateOf(HomeTab.HOME) }
 
     val isAdmin = role.priority >= UserRole.ADMIN.priority
@@ -87,6 +93,8 @@ fun HomeScreen(
     val liveCoins = (userMap["coins"] as? Number)?.toInt() ?: (profile?.coins ?: 0)
     val liveTotalSms = (userMap["totalSms"] as? Number)?.toInt() ?: (profile?.totalSms ?: 0)
     val liveTotalOtps = (userMap["totalOtps"] as? Number)?.toInt() ?: (profile?.totalOtps ?: 0)
+    val livePremium = (userMap["premium"] as? Boolean) ?: (profile?.premium ?: false)
+    val liveBanned = (userMap["banned"] as? Boolean) ?: (profile?.banned ?: false)
 
     val userName = profile?.displayName ?: (user.displayName ?: "User")
     val userEmail = profile?.email ?: (user.email ?: "")
@@ -111,23 +119,48 @@ fun HomeScreen(
                     liveCoins = liveCoins,
                     liveTotalSms = liveTotalSms,
                     liveTotalOtps = liveTotalOtps,
+                    livePremium = livePremium,
+                    liveBanned = liveBanned,
                     unreadNotifications = unreadNotifications,
-                    onStartBlast = { onNavigate(Routes.SMS_BLAST) },
+                    onStartBlast = { currentTab = HomeTab.BLAST },
                     onOpenWallet = { currentTab = HomeTab.WALLET },
                     onOpenHistory = { currentTab = HomeTab.HISTORY },
+                    onOpenOtp = { currentTab = HomeTab.OTP },
                     onOpenRefer = { onNavigate(Routes.REFER) },
                     onOpenNotifications = { onNavigate(Routes.NOTIFICATIONS) },
+                    onOpenTransfer = { onNavigate(Routes.TRANSFER) },
+                    onOpenGift = { onNavigate(Routes.GIFT) },
+                    onOpenTemplates = { onNavigate(Routes.TEMPLATES) },
+                    onOpenGiveaways = { onNavigate(Routes.GIVEAWAYS) },
+                    onOpenAnnouncements = { onNavigate(Routes.ANNOUNCEMENTS) },
+                    onOpenSettings = { onNavigate(Routes.USER_SETTINGS) },
                 )
-                HomeTab.BLAST -> PlaceholderScreen("SMS Blast", "Tap START on home")
+
+                HomeTab.BLAST -> SmsBlastScreen(
+                    authManager = authManager,
+                    onBack = { currentTab = HomeTab.HOME },
+                    onOpenBulkMode = { onNavigate(Routes.BULK_BLAST) },
+                )
+
                 HomeTab.ADMIN -> {
-                    if (isAdmin) AdminScreen(
-                        adminUid = user.uid,
-                        adminEmail = userEmail,
-                        adminName = userName,
-                        isOwner = isOwner,
-                        onExit = { currentTab = HomeTab.HOME },
-                    ) else PlaceholderScreen("Not Authorized", "")
+                    if (isAdmin) {
+                        AdminScreen(
+                            adminUid = user.uid,
+                            adminEmail = userEmail,
+                            adminName = userName,
+                            isOwner = isOwner,
+                            onExit = { currentTab = HomeTab.HOME },
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier.fillMaxSize().background(colors.background),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("Not authorized", color = colors.onSurfaceVariant)
+                        }
+                    }
                 }
+
                 HomeTab.OTP -> OtpScreen(
                     uid = user.uid,
                     userName = userName,
@@ -135,7 +168,12 @@ fun HomeScreen(
                     isAdmin = isAdmin,
                     onBack = { currentTab = HomeTab.HOME },
                 )
-                HomeTab.HISTORY -> HistoryScreen(uid = user.uid, onBack = { currentTab = HomeTab.HOME })
+
+                HomeTab.HISTORY -> HistoryScreen(
+                    uid = user.uid,
+                    onBack = { currentTab = HomeTab.HOME },
+                )
+
                 HomeTab.WALLET -> WalletScreen(
                     uid = user.uid,
                     userName = userName,
@@ -156,12 +194,21 @@ private fun HomeTabContent(
     liveCoins: Int,
     liveTotalSms: Int,
     liveTotalOtps: Int,
+    livePremium: Boolean,
+    liveBanned: Boolean,
     unreadNotifications: Int,
     onStartBlast: () -> Unit,
     onOpenWallet: () -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenOtp: () -> Unit,
     onOpenRefer: () -> Unit,
     onOpenNotifications: () -> Unit,
+    onOpenTransfer: () -> Unit,
+    onOpenGift: () -> Unit,
+    onOpenTemplates: () -> Unit,
+    onOpenGiveaways: () -> Unit,
+    onOpenAnnouncements: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
     val scrollState = rememberScrollState()
@@ -172,6 +219,7 @@ private fun HomeTabContent(
             .verticalScroll(scrollState)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
+        // header row
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (profile?.photoUrl?.isNotBlank() == true) {
                 AsyncImage(
@@ -195,10 +243,16 @@ private fun HomeTabContent(
             Spacer(Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    profile?.displayName ?: user.displayName ?: "User",
-                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        profile?.displayName ?: user.displayName ?: "User",
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
+                    )
+                    if (livePremium) {
+                        Spacer(Modifier.width(6.dp))
+                        Text("💎", fontSize = 13.sp)
+                    }
+                }
                 Text(
                     role.name.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() },
                     fontSize = 11.sp, color = colors.primary,
@@ -239,27 +293,52 @@ private fun HomeTabContent(
 
             Spacer(Modifier.width(8.dp))
 
+            // Settings
             Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = colors.primary.copy(alpha = 0.15f),
-                onClick = onOpenWallet,
+                onClick = onOpenSettings,
+                shape = CircleShape,
+                color = colors.surface,
+                modifier = Modifier.size(42.dp),
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Default.MonetizationOn, null, modifier = Modifier.size(16.dp), tint = colors.primary)
-                    Spacer(Modifier.width(6.dp))
-                    Text("$liveCredits", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.Settings, "Settings",
+                        tint = colors.onBackground, modifier = Modifier.size(20.dp),
+                    )
                 }
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        if (liveBanned) {
+            Spacer(Modifier.height(12.dp))
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = colors.error.copy(alpha = 0.15f),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("🚫", fontSize = 18.sp)
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            "Account banned",
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.error,
+                        )
+                        Text(
+                            profile?.banReason?.ifBlank { "Contact admin" } ?: "Contact admin",
+                            fontSize = 11.sp, color = colors.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
 
+        Spacer(Modifier.height(20.dp))
+
+        // Big blast button
         Surface(
             onClick = onStartBlast,
-            modifier = Modifier.fillMaxWidth().height(130.dp),
+            modifier = Modifier.fillMaxWidth().height(120.dp),
             shape = RoundedCornerShape(24.dp),
             color = Color.Transparent,
         ) {
@@ -269,7 +348,7 @@ private fun HomeTabContent(
                 contentAlignment = Alignment.Center,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.RocketLaunch, null, modifier = Modifier.size(38.dp), tint = Color.Black)
+                    Icon(Icons.Default.RocketLaunch, null, modifier = Modifier.size(36.dp), tint = Color.Black)
                     Spacer(Modifier.height(8.dp))
                     Text("START SMS BLAST", fontSize = 18.sp, fontWeight = FontWeight.Black, color = Color.Black)
                     Text("Tap to launch", fontSize = 11.sp, color = Color.Black.copy(alpha = 0.7f))
@@ -277,19 +356,20 @@ private fun HomeTabContent(
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
 
+        // Stats
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             StatCard(Icons.Default.Send, "Total SMS", "$liveTotalSms", Modifier.weight(1f))
             StatCard(Icons.Default.VpnKey, "OTPs", "$liveTotalOtps", Modifier.weight(1f))
         }
         Spacer(Modifier.height(12.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatCard(Icons.Default.MonetizationOn, "Credits", "$liveCredits", Modifier.weight(1f))
-            StatCard(Icons.Default.Toll, "Coins", "$liveCoins", Modifier.weight(1f))
+            StatCard(Icons.Default.MonetizationOn, "Credits", "$liveCredits", Modifier.weight(1f), onClick = onOpenWallet)
+            StatCard(Icons.Default.Toll, "Coins", "$liveCoins", Modifier.weight(1f), onClick = onOpenWallet)
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
 
         Text("Quick Access", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
         Spacer(Modifier.height(8.dp))
@@ -297,15 +377,44 @@ private fun HomeTabContent(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             QuickAccessChip(Icons.Default.History, "History", onOpenHistory, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.CardGiftcard, "Refer", onOpenRefer, Modifier.weight(1f))
-            QuickAccessChip(Icons.Default.Settings, "Settings", { }, Modifier.weight(1f))
+            QuickAccessChip(Icons.Default.VpnKey, "OTP", onOpenOtp, Modifier.weight(1f))
         }
+
+        Spacer(Modifier.height(8.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuickAccessChip(Icons.Default.SwapHoriz, "Transfer", onOpenTransfer, Modifier.weight(1f))
+            QuickAccessChip(Icons.Default.CardGiftcard, "Gift", onOpenGift, Modifier.weight(1f))
+            QuickAccessChip(Icons.Default.WorkspacePremium, "Bulk", { onStartBlast() }, Modifier.weight(1f))
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuickAccessChip(Icons.Default.WorkspacePremium, "Giveaways", onOpenGiveaways, Modifier.weight(1f))
+            QuickAccessChip(Icons.Default.Notifications, "Announce", onOpenAnnouncements, Modifier.weight(1f))
+            QuickAccessChip(Icons.Default.MonetizationOn, "Wallet", onOpenWallet, Modifier.weight(1f))
+        }
+
+        Spacer(Modifier.height(24.dp))
     }
 }
 
 @Composable
-private fun StatCard(icon: ImageVector, label: String, value: String, modifier: Modifier = Modifier) {
+private fun StatCard(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+) {
     val colors = LocalSanjiColors.current
-    Surface(modifier = modifier, shape = RoundedCornerShape(16.dp), color = colors.surface) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = colors.surface,
+        onClick = onClick ?: {},
+    ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Icon(icon, null, tint = colors.primary, modifier = Modifier.size(20.dp))
             Spacer(Modifier.height(10.dp))
@@ -326,21 +435,6 @@ private fun QuickAccessChip(icon: ImageVector, label: String, onClick: () -> Uni
             Icon(icon, null, tint = colors.primary, modifier = Modifier.size(20.dp))
             Spacer(Modifier.height(6.dp))
             Text(label, fontSize = 11.sp, color = colors.onBackground)
-        }
-    }
-}
-
-@Composable
-private fun PlaceholderScreen(title: String, subtitle: String) {
-    val colors = LocalSanjiColors.current
-    Box(
-        modifier = Modifier.fillMaxSize().background(colors.background),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
-            Spacer(Modifier.height(8.dp))
-            Text(subtitle, fontSize = 13.sp, color = colors.onSurfaceVariant)
         }
     }
 }
