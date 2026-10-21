@@ -3,6 +3,7 @@ package com.sanji.bomberpro.services
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import com.sanji.bomberpro.FirebaseConfig
 import com.sanji.bomberpro.data.FirebaseNode
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,8 @@ data class AdminUser(
     val role: String = "user",
     val credits: Int = 0,
     val coins: Int = 0,
+    val manualAddedCredits: Int = 0,
+    val manualAddedCoins: Int = 0,
     val totalBlasts: Int = 0,
     val totalSms: Int = 0,
     val totalOtps: Int = 0,
@@ -177,6 +180,8 @@ class AdminService {
             role = map["role"] as? String ?: "user",
             credits = (map["credits"] as? Number)?.toInt() ?: 0,
             coins = (map["coins"] as? Number)?.toInt() ?: 0,
+            manualAddedCredits = (map["manualAddedCredits"] as? Number)?.toInt() ?: 0,
+            manualAddedCoins = (map["manualAddedCoins"] as? Number)?.toInt() ?: 0,
             totalBlasts = (map["totalBlasts"] as? Number)?.toInt() ?: 0,
             totalSms = (map["totalSms"] as? Number)?.toInt() ?: 0,
             totalOtps = (map["totalOtps"] as? Number)?.toInt() ?: 0,
@@ -205,7 +210,10 @@ class AdminService {
             if (amount <= 0) return@withContext false
             try {
                 db.collection(FirebaseConfig.COL_USERS).document(uid)
-                    .update("credits", FieldValue.increment(amount.toLong())).await()
+                    .update(
+                        "credits", FieldValue.increment(amount.toLong()),
+                        "manualAddedCredits", FieldValue.increment(amount.toLong()),
+                    ).await()
                 logTransaction(uid, "credit_add_manual", amount, reason)
                 logAudit(adminUid, "admin_credit_add", uid, amount, reason)
                 true
@@ -219,9 +227,15 @@ class AdminService {
             if (amount <= 0) return@withContext false
             val ref = db.collection(FirebaseConfig.COL_USERS).document(uid)
             try {
-                val current = (ref.get().await().getLong("credits") ?: 0L).toInt()
+                val snap = ref.get().await()
+                val current = (snap.getLong("credits") ?: 0L).toInt()
                 if (current < amount) return@withContext false
-                ref.update("credits", (current - amount).toLong()).await()
+                val manual = (snap.getLong("manualAddedCredits") ?: 0L).toInt()
+                val cut = minOf(amount, manual)
+                ref.update(
+                    "credits", (current - amount).toLong(),
+                    "manualAddedCredits", (manual - cut).toLong().coerceAtLeast(0L),
+                ).await()
                 logTransaction(uid, "credit_deduct", -amount, "admin-deduct")
                 logAudit(adminUid, "admin_credit_deduct", uid, amount, "")
                 true
@@ -235,7 +249,10 @@ class AdminService {
             if (amount <= 0) return@withContext false
             try {
                 db.collection(FirebaseConfig.COL_USERS).document(uid)
-                    .update("coins", FieldValue.increment(amount.toLong())).await()
+                    .update(
+                        "coins", FieldValue.increment(amount.toLong()),
+                        "manualAddedCoins", FieldValue.increment(amount.toLong()),
+                    ).await()
                 logTransaction(uid, "coin_add_manual", amount, "admin-add")
                 logAudit(adminUid, "admin_coin_add", uid, amount, "")
                 true
@@ -249,9 +266,15 @@ class AdminService {
             if (amount <= 0) return@withContext false
             val ref = db.collection(FirebaseConfig.COL_USERS).document(uid)
             try {
-                val current = (ref.get().await().getLong("coins") ?: 0L).toInt()
+                val snap = ref.get().await()
+                val current = (snap.getLong("coins") ?: 0L).toInt()
                 if (current < amount) return@withContext false
-                ref.update("coins", (current - amount).toLong()).await()
+                val manual = (snap.getLong("manualAddedCoins") ?: 0L).toInt()
+                val cut = minOf(amount, manual)
+                ref.update(
+                    "coins", (current - amount).toLong(),
+                    "manualAddedCoins", (manual - cut).toLong().coerceAtLeast(0L),
+                ).await()
                 logTransaction(uid, "coin_deduct", -amount, "admin-deduct")
                 logAudit(adminUid, "admin_coin_deduct", uid, amount, "")
                 true
@@ -259,6 +282,61 @@ class AdminService {
                 false
             }
         }
+
+    // ============================================================
+    //  BULK ADD / DEDUCT (all users)
+    // ============================================================
+    suspend fun addCreditsToAll(amount: Int, adminUid: String): Result<Int> = withContext(Dispatchers.IO) {
+        if (amount <= 0) return@withContext Result.failure(Exception("Amount must be > 0"))
+        try {
+            val users = db.collection(FirebaseConfig.COL_USERS).get().await().documents
+            var count = 0
+            val chunks = users.chunked(400)
+            for (chunk in chunks) {
+                val batch = db.batch()
+                for (u in chunk) {
+                    batch.update(
+                        u.reference,
+                        "credits", FieldValue.increment(amount.toLong()),
+                        "manualAddedCredits", FieldValue.increment(amount.toLong()),
+                    )
+                    count++
+                }
+                batch.commit().await()
+            }
+            logAudit(adminUid, "admin_credit_add_all", "", amount, "count=$count")
+            Result.success(count)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deductCreditsFromAll(amount: Int, adminUid: String): Result<Int> = withContext(Dispatchers.IO) {
+        if (amount < 0) return@withContext Result.failure(Exception("Amount must be >= 0"))
+        try {
+            val users = db.collection(FirebaseConfig.COL_USERS).get().await().documents
+            var totalDeducted = 0
+            var usersAffected = 0
+            for (u in users) {
+                try {
+                    val man = (u.getLong("manualAddedCredits") ?: 0L).toInt()
+                    if (man <= 0) continue
+                    val cut = minOf(amount, man)
+                    if (cut <= 0) continue
+                    u.reference.update(
+                        "credits", FieldValue.increment(-cut.toLong()),
+                        "manualAddedCredits", FieldValue.increment(-cut.toLong()),
+                    ).await()
+                    totalDeducted += cut
+                    usersAffected++
+                } catch (_: Exception) {}
+            }
+            logAudit(adminUid, "admin_credit_deduct_all", "", amount, "got=$totalDeducted from=$usersAffected")
+            Result.success(usersAffected)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
     // ============================================================
     //  BAN / UNBAN
@@ -450,7 +528,7 @@ class AdminService {
 
     suspend fun addRole(
         email: String,
-        role: String,     // "admin" or "super_admin"
+        role: String,
         addedByEmail: String,
         adminUid: String,
     ): Result<Unit> = withContext(Dispatchers.IO) {
@@ -470,12 +548,12 @@ class AdminService {
             val existing = db.collection(FirebaseConfig.COL_ROLES).document(hash).get().await()
             if (existing.exists()) {
                 val existingRole = existing.getString("role")
-                if (existingRole != null && existingRole != "user") {
+                val active = existing.getBoolean("active") ?: true
+                if (active && existingRole != null && existingRole != "user") {
                     return@withContext Result.failure(Exception("Already has role: $existingRole"))
                 }
             }
 
-            // Write roles doc
             db.collection(FirebaseConfig.COL_ROLES).document(hash).set(
                 mapOf(
                     "email" to cleanEmail,
@@ -483,10 +561,10 @@ class AdminService {
                     "addedBy" to addedByEmail.lowercase(),
                     "addedAt" to System.currentTimeMillis() / 1000L,
                     "active" to true,
-                )
+                ),
+                SetOptions.merge(),
             ).await()
 
-            // Update users doc if exists
             try {
                 val usersSnap = db.collection(FirebaseConfig.COL_USERS)
                     .whereEqualTo("email", cleanEmail)
@@ -496,7 +574,7 @@ class AdminService {
                 }
             } catch (_: Exception) {}
 
-            logAudit(adminUid, "admin_add_role", 0, 0, "$cleanEmail=$role")
+            logAudit(adminUid, "admin_add_role", "", 0, "$cleanEmail=$role")
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -516,7 +594,6 @@ class AdminService {
             db.collection(FirebaseConfig.COL_ROLES).document(hash)
                 .update("active", false).await()
 
-            // Reset user doc role
             try {
                 val usersSnap = db.collection(FirebaseConfig.COL_USERS)
                     .whereEqualTo("email", cleanEmail)
@@ -526,7 +603,7 @@ class AdminService {
                 }
             } catch (_: Exception) {}
 
-            logAudit(adminUid, "admin_remove_role", 0, 0, cleanEmail)
+            logAudit(adminUid, "admin_remove_role", "", 0, cleanEmail)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -547,15 +624,13 @@ class AdminService {
                 return@withContext Result.failure(Exception("Already owner"))
             }
 
-            // 1. Update settings.ownerEmail
             db.collection(FirebaseConfig.COL_SETTINGS)
                 .document(FirebaseConfig.DOC_GLOBAL_SETTINGS)
                 .set(
                     mapOf("ownerEmail" to cleanNew),
-                    com.google.firebase.firestore.SetOptions.merge(),
+                    SetOptions.merge(),
                 ).await()
 
-            // 2. Demote old owner to super_admin
             val oldHash = hashEmail(currentOwner)
             db.collection(FirebaseConfig.COL_ROLES).document(oldHash).set(
                 mapOf(
@@ -565,10 +640,9 @@ class AdminService {
                     "addedAt" to System.currentTimeMillis() / 1000L,
                     "active" to true,
                 ),
-                com.google.firebase.firestore.SetOptions.merge(),
+                SetOptions.merge(),
             ).await()
 
-            // 3. Promote new owner
             val newHash = hashEmail(cleanNew)
             db.collection(FirebaseConfig.COL_ROLES).document(newHash).set(
                 mapOf(
@@ -578,10 +652,9 @@ class AdminService {
                     "addedAt" to System.currentTimeMillis() / 1000L,
                     "active" to true,
                 ),
-                com.google.firebase.firestore.SetOptions.merge(),
+                SetOptions.merge(),
             ).await()
 
-            // 4. Update users docs
             try {
                 val newUserSnap = db.collection(FirebaseConfig.COL_USERS)
                     .whereEqualTo("email", cleanNew)
@@ -597,7 +670,7 @@ class AdminService {
                 }
             } catch (_: Exception) {}
 
-            logAudit(currentOwnerUid, "admin_transfer_owner", 0, 0, "$currentOwner->$cleanNew")
+            logAudit(currentOwnerUid, "admin_transfer_owner", "", 0, "$currentOwner->$cleanNew")
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -627,7 +700,7 @@ class AdminService {
     private suspend fun logAudit(
         adminUid: String,
         action: String,
-        targetUid: Int,
+        targetUid: String,
         amount: Int,
         reason: String,
     ) {
