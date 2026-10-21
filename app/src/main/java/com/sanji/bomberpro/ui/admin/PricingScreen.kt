@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -102,7 +103,6 @@ fun PricingScreen(
             return
         }
 
-        // Credit packs
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("💰 Credit Packs", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground, modifier = Modifier.weight(1f))
             IconButton(onClick = { showAddPack = true }, modifier = Modifier.size(32.dp)) {
@@ -135,7 +135,6 @@ fun PricingScreen(
 
         Spacer(Modifier.height(20.dp))
 
-        // Plans
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("🏆 Subscription Plans", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground, modifier = Modifier.weight(1f))
             IconButton(onClick = { showAddPlan = true }, modifier = Modifier.size(32.dp)) {
