@@ -95,6 +95,7 @@ fun HomeScreen(
                     onStartBlast = { onNavigate(Routes.SMS_BLAST) },
                     onOpenWallet = { currentTab = HomeTab.WALLET },
                     onOpenHistory = { currentTab = HomeTab.HISTORY },
+                    onOpenRefer = { onNavigate(Routes.REFER) },
                 )
                 HomeTab.BLAST -> PlaceholderScreen("SMS Blast", "Tap START on home")
                 HomeTab.OTP -> OtpScreen(
@@ -129,6 +130,7 @@ private fun HomeTabContent(
     onStartBlast: () -> Unit,
     onOpenWallet: () -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenRefer: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
     val scrollState = rememberScrollState()
@@ -229,7 +231,7 @@ private fun HomeTabContent(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             QuickAccessChip(Icons.Default.History, "History", onOpenHistory, Modifier.weight(1f))
-            QuickAccessChip(Icons.Default.CardGiftcard, "Refer", { }, Modifier.weight(1f))
+            QuickAccessChip(Icons.Default.CardGiftcard, "Refer", onOpenRefer, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.Settings, "Settings", { }, Modifier.weight(1f))
         }
     }
