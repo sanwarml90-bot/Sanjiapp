@@ -51,6 +51,7 @@ import com.sanji.bomberpro.data.UserRole
 import com.sanji.bomberpro.navigation.Routes
 import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.admin.AdminScreen
 import com.sanji.bomberpro.ui.history.HistoryScreen
 import com.sanji.bomberpro.ui.otp.OtpScreen
 import com.sanji.bomberpro.ui.wallet.WalletScreen
@@ -65,6 +66,9 @@ fun HomeScreen(
 ) {
     val colors = LocalSanjiColors.current
     var currentTab by remember { mutableStateOf(HomeTab.HOME) }
+
+    val isAdmin = role.priority >= UserRole.ADMIN.priority
+    val isOwner = role.priority >= UserRole.SUPER_ADMIN.priority
 
     var userMap by remember { mutableStateOf<Map<String, Any?>>(emptyMap()) }
     LaunchedEffect(user.uid) {
@@ -82,7 +86,11 @@ fun HomeScreen(
     Scaffold(
         containerColor = colors.background,
         bottomBar = {
-            BottomNavBar(current = currentTab, onTabSelect = { currentTab = it })
+            BottomNavBar(
+                current = currentTab,
+                isAdmin = isAdmin,
+                onTabSelect = { currentTab = it },
+            )
         },
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
@@ -101,11 +109,22 @@ fun HomeScreen(
                     onOpenRefer = { onNavigate(Routes.REFER) },
                 )
                 HomeTab.BLAST -> PlaceholderScreen("SMS Blast", "Tap START on home")
+                HomeTab.ADMIN -> {
+                    if (isAdmin) {
+                        AdminScreen(
+                            adminUid = user.uid,
+                            isOwner = isOwner,
+                            onExit = { currentTab = HomeTab.HOME },
+                        )
+                    } else {
+                        PlaceholderScreen("Not Authorized", "")
+                    }
+                }
                 HomeTab.OTP -> OtpScreen(
                     uid = user.uid,
                     userName = userName,
                     userEmail = userEmail,
-                    isAdmin = role.priority >= UserRole.ADMIN.priority,
+                    isAdmin = isAdmin,
                     onBack = { currentTab = HomeTab.HOME },
                 )
                 HomeTab.HISTORY -> HistoryScreen(
