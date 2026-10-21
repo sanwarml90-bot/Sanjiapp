@@ -4,14 +4,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,14 +19,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.PlusOne
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Toll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -42,7 +36,6 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,15 +55,8 @@ import com.sanji.bomberpro.services.AdminService
 import com.sanji.bomberpro.services.AdminUser
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 private enum class AdminView { HOME, FIREBASE, USERS, USER_DETAIL }
-
-private val FMT_SHORT = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
-private fun fmtShort(ts: Long): String =
-    try { FMT_SHORT.format(Date(ts * 1000L)) } catch (_: Exception) { "—" }
 
 @Composable
 fun AdminScreen(
@@ -95,7 +81,6 @@ fun AdminScreen(
     var selectedUser by remember { mutableStateOf<AdminUser?>(null) }
 
     var error by remember { mutableStateOf<String?>(null) }
-    var success by remember { mutableStateOf<String?>(null) }
 
     fun loadFirebases() {
         scope.launch {
@@ -159,7 +144,10 @@ fun AdminScreen(
                         Spacer(Modifier.height(8.dp))
                         Button(
                             onClick = { showAddFb = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colors.primary,
+                                contentColor = Color.Black,
+                            ),
                         ) { Text("Add Firebase") }
                     }
                 }
@@ -167,24 +155,27 @@ fun AdminScreen(
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(firebases) { fb ->
                         val idx = firebases.indexOf(fb) + 1
-                        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = colors.surface,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
                             Column(Modifier.padding(12.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             "Firebase $idx",
-                                            fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
                                             color = colors.onBackground,
                                         )
-                                        Text(
-                                            fb.label,
-                                            fontSize = 11.sp, color = colors.onSurfaceVariant,
-                                        )
+                                        Text(fb.label, fontSize = 11.sp, color = colors.onSurfaceVariant)
                                         if (isOwner) {
                                             Spacer(Modifier.height(4.dp))
                                             Text(
                                                 fb.url,
-                                                fontSize = 10.sp, color = colors.onSurfaceVariant,
+                                                fontSize = 10.sp,
+                                                color = colors.onSurfaceVariant,
                                                 fontFamily = FontFamily.Monospace,
                                                 maxLines = 2,
                                             )
@@ -256,19 +247,17 @@ fun AdminScreen(
 
             Spacer(Modifier.height(8.dp))
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = userQuery,
-                    onValueChange = {
-                        userQuery = it
-                        loadUsers()
-                    },
-                    leadingIcon = { Icon(Icons.Default.Search, null, tint = colors.onSurfaceVariant) },
-                    placeholder = { Text("Search by name / email / uid") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            OutlinedTextField(
+                value = userQuery,
+                onValueChange = {
+                    userQuery = it
+                    loadUsers()
+                },
+                leadingIcon = { Icon(Icons.Default.Search, null, tint = colors.onSurfaceVariant) },
+                placeholder = { Text("Search by name / email / uid") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
 
             Spacer(Modifier.height(8.dp))
 
@@ -297,7 +286,8 @@ fun AdminScreen(
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
                                             u.displayName,
-                                            fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold,
                                             color = colors.onBackground,
                                         )
                                         if (u.banned) {
@@ -308,15 +298,15 @@ fun AdminScreen(
                                             Spacer(Modifier.width(6.dp))
                                             Text(
                                                 u.role.replace('_', ' ').uppercase(),
-                                                fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
                                                 color = colors.primary,
                                             )
                                         }
                                     }
                                     Text(
-                                        u.email,
-                                        fontSize = 10.sp, color = colors.onSurfaceVariant,
-                                        maxLines = 1,
+                                        u.email, fontSize = 10.sp,
+                                        color = colors.onSurfaceVariant, maxLines = 1,
                                     )
                                     Text(
                                         "UID: ${u.uid}",
@@ -395,7 +385,7 @@ private fun AdminHomeMenu(
         AdminMenuCard(
             emoji = "👥",
             title = "Users",
-            subtitle = "Search, view, adjust credits and coins",
+            subtitle = "Search, view, credits, ban, limits, notes, tags, subscription",
             onClick = onOpenUsers,
         )
 
@@ -489,229 +479,6 @@ private fun AddFirebaseDialog(
                     Text(error, color = colors.error, fontSize = 11.sp)
                 }
             }
-        },
-    )
-}
-
-@Composable
-private fun UserDetailSection(
-    user: AdminUser,
-    adminUid: String,
-    isOwner: Boolean,
-    service: AdminService,
-    onBack: () -> Unit,
-    onRefresh: () -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-    val scope = rememberCoroutineScope()
-
-    var showCreditsAdd by remember { mutableStateOf(false) }
-    var showCreditsDeduct by remember { mutableStateOf(false) }
-    var showCoinsAdd by remember { mutableStateOf(false) }
-    var showCoinsDeduct by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var success by remember { mutableStateOf<String?>(null) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(colors.background)
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
-            }
-            Text(
-                "User Detail",
-                fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                color = colors.onBackground, modifier = Modifier.weight(1f),
-            )
-            IconButton(onClick = onRefresh) {
-                Icon(Icons.Default.Refresh, "Refresh", tint = colors.primary)
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        // User card
-        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                DetailRow("Name", user.displayName)
-                DetailRow("Email", user.email)
-                DetailRow("UID", user.uid)
-                DetailRow("Role", user.role.replace('_', ' ').uppercase())
-                DetailRow("Terms", if (user.termsAccepted) "✅ Accepted" else "❌ Pending")
-                DetailRow("Banned", if (user.banned) "🚫 ${user.banReason.ifBlank { "yes" }}" else "No")
-                DetailRow("Premium", if (user.premium) "💎 Yes" else "No")
-                DetailRow("Plan", "${user.subscriptionPlan}${if (user.subscriptionExpiresAt > 0) " · till ${fmtShort(user.subscriptionExpiresAt)}" else ""}")
-                DetailRow("Refer Code", user.referCode.ifBlank { "—" })
-                DetailRow("Referred By", user.referredBy ?: "—")
-                DetailRow("Joined", fmtShort(user.createdAt))
-                DetailRow("Last Active", fmtShort(user.lastActive))
-                DetailRow("Total SMS", "${user.totalSms}")
-                DetailRow("Total OTPs", "${user.totalOtps}")
-                DetailRow("Total Blasts", "${user.totalBlasts}")
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // Balances
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.weight(1f)) {
-                Column(Modifier.padding(14.dp)) {
-                    Text("💰 Credits", fontSize = 11.sp, color = colors.onSurfaceVariant)
-                    Text("${user.credits}", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = colors.primary)
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        SmallBtn("+", colors.success) { showCreditsAdd = true }
-                        SmallBtn("−", colors.error) { showCreditsDeduct = true }
-                    }
-                }
-            }
-            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.weight(1f)) {
-                Column(Modifier.padding(14.dp)) {
-                    Text("🪙 Coins", fontSize = 11.sp, color = colors.onSurfaceVariant)
-                    Text("${user.coins}", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = colors.primary)
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        SmallBtn("+", colors.success) { showCoinsAdd = true }
-                        SmallBtn("−", colors.error) { showCoinsDeduct = true }
-                    }
-                }
-            }
-        }
-
-        if (error != null) {
-            Spacer(Modifier.height(12.dp))
-            Text(error!!, color = colors.error, fontSize = 12.sp)
-        }
-        if (success != null) {
-            Spacer(Modifier.height(12.dp))
-            Text(success!!, color = colors.success, fontSize = 12.sp)
-        }
-
-        if (showCreditsAdd) {
-            AmountDialog(
-                title = "Add Credits",
-                onDismiss = { showCreditsAdd = false },
-                onConfirm = { amt ->
-                    scope.launch {
-                        val ok = service.addCreditsToUser(user.uid, amt, adminUid, "admin-add")
-                        showCreditsAdd = false
-                        if (ok) { success = "+$amt credits"; onRefresh() } else error = "Failed"
-                    }
-                },
-            )
-        }
-        if (showCreditsDeduct) {
-            AmountDialog(
-                title = "Deduct Credits",
-                onDismiss = { showCreditsDeduct = false },
-                onConfirm = { amt ->
-                    scope.launch {
-                        val ok = service.deductCreditsFromUser(user.uid, amt, adminUid)
-                        showCreditsDeduct = false
-                        if (ok) { success = "-$amt credits"; onRefresh() } else error = "Failed — insufficient or error"
-                    }
-                },
-            )
-        }
-        if (showCoinsAdd) {
-            AmountDialog(
-                title = "Add Coins",
-                onDismiss = { showCoinsAdd = false },
-                onConfirm = { amt ->
-                    scope.launch {
-                        val ok = service.addCoinsToUser(user.uid, amt, adminUid)
-                        showCoinsAdd = false
-                        if (ok) { success = "+$amt coins"; onRefresh() } else error = "Failed"
-                    }
-                },
-            )
-        }
-        if (showCoinsDeduct) {
-            AmountDialog(
-                title = "Deduct Coins",
-                onDismiss = { showCoinsDeduct = false },
-                onConfirm = { amt ->
-                    scope.launch {
-                        val ok = service.deductCoinsFromUser(user.uid, amt, adminUid)
-                        showCoinsDeduct = false
-                        if (ok) { success = "-$amt coins"; onRefresh() } else error = "Failed — insufficient or error"
-                    }
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun SmallBtn(label: String, color: Color, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
-        color = color.copy(alpha = 0.15f),
-    ) {
-        Text(
-            label,
-            fontSize = 16.sp, fontWeight = FontWeight.Bold, color = color,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
-        )
-    }
-}
-
-@Composable
-private fun DetailRow(label: String, value: String) {
-    val colors = LocalSanjiColors.current
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(label, fontSize = 11.sp, color = colors.onSurfaceVariant)
-        Text(
-            value, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-            color = colors.onBackground, maxLines = 2, textAlign = TextAlign.End,
-        )
-    }
-}
-
-@Composable
-private fun AmountDialog(
-    title: String,
-    onDismiss: () -> Unit,
-    onConfirm: (Int) -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-    var text by remember { mutableStateOf("") }
-    val amt = text.toIntOrNull() ?: 0
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(
-                onClick = { if (amt > 0) onConfirm(amt) },
-                enabled = amt > 0,
-            ) { Text("Confirm", color = colors.primary, fontWeight = FontWeight.Bold) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel", color = colors.onSurfaceVariant) }
-        },
-        containerColor = colors.surface,
-        titleContentColor = colors.onBackground,
-        textContentColor = colors.onBackground,
-        title = { Text(title) },
-        text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it.filter { c -> c.isDigit() } },
-                label = { Text("Amount") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth(),
-            )
         },
     )
 }
