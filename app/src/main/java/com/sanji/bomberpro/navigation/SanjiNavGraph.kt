@@ -10,6 +10,7 @@ import com.sanji.bomberpro.data.AuthState
 import com.sanji.bomberpro.ui.auth.LoginScreen
 import com.sanji.bomberpro.ui.blast.SmsBlastScreen
 import com.sanji.bomberpro.ui.home.HomeScreen
+import com.sanji.bomberpro.ui.refer.ReferScreen
 import com.sanji.bomberpro.ui.splash.SplashScreen
 
 object Routes {
@@ -17,6 +18,7 @@ object Routes {
     const val LOGIN = "login"
     const val HOME = "home"
     const val SMS_BLAST = "sms_blast"
+    const val REFER = "refer"
 }
 
 @Composable
@@ -70,6 +72,16 @@ fun SanjiNavGraph(
                 authManager = authManager,
                 onBack = { navController.popBackStack() },
             )
+        }
+
+        composable(Routes.REFER) {
+            val logged = authState
+            if (logged is AuthState.LoggedIn) {
+                ReferScreen(
+                    uid = logged.user.uid,
+                    onBack = { navController.popBackStack() },
+                )
+            }
         }
     }
 }
