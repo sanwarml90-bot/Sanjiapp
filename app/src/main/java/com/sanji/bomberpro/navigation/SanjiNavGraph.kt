@@ -33,9 +33,7 @@ fun SanjiNavGraph(
             SplashScreen(
                 onFinished = {
                     val target = if (authState is AuthState.LoggedIn) Routes.HOME else Routes.LOGIN
-                    navController.navigate(target) {
-                        popUpTo(Routes.SPLASH) { inclusive = true }
-                    }
+                    navController.navigate(target) { popUpTo(Routes.SPLASH) { inclusive = true } }
                 }
             )
         }
@@ -44,9 +42,7 @@ fun SanjiNavGraph(
             LoginScreen(
                 authManager = authManager,
                 onLoginSuccess = {
-                    navController.navigate(Routes.HOME) {
-                        popUpTo(Routes.LOGIN) { inclusive = true }
-                    }
+                    navController.navigate(Routes.HOME) { popUpTo(Routes.LOGIN) { inclusive = true } }
                 }
             )
         }
@@ -54,12 +50,9 @@ fun SanjiNavGraph(
         composable(Routes.HOME) {
             LaunchedEffect(authState) {
                 if (authState is AuthState.LoggedOut) {
-                    navController.navigate(Routes.LOGIN) {
-                        popUpTo(Routes.HOME) { inclusive = true }
-                    }
+                    navController.navigate(Routes.LOGIN) { popUpTo(Routes.HOME) { inclusive = true } }
                 }
             }
-
             val logged = authState
             if (logged is AuthState.LoggedIn) {
                 HomeScreen(
@@ -73,19 +66,10 @@ fun SanjiNavGraph(
         }
 
         composable(Routes.SMS_BLAST) {
-            val logged = authState
-            if (logged is AuthState.LoggedIn) {
-                SmsBlastScreen(
-                    profile = logged.profile,
-                    onBack = { navController.popBackStack() },
-                )
-            } else {
-                LaunchedEffect(Unit) {
-                    navController.navigate(Routes.LOGIN) {
-                        popUpTo(Routes.HOME) { inclusive = true }
-                    }
-                }
-            }
+            SmsBlastScreen(
+                authManager = authManager,
+                onBack = { navController.popBackStack() },
+            )
         }
     }
 }
