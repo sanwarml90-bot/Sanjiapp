@@ -25,6 +25,8 @@ class AuthManager(private val context: Context) {
     private val _authState = MutableStateFlow<AuthState>(AuthState.Initializing)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
+    private var cachedOwnerEmail: String? = null
+
     val currentUser: FirebaseUser? get() = auth.currentUser
 
     init {
@@ -38,8 +40,29 @@ class AuthManager(private val context: Context) {
         }
     }
 
+    private suspend fun getOwnerEmail(): String {
+        cachedOwnerEmail?.let { return it }
+        try {
+            val doc = db.collection(FirebaseConfig.COL_SETTINGS)
+                .document(FirebaseConfig.DOC_GLOBAL_SETTINGS)
+                .get().await()
+            val email = doc.getString("ownerEmail")
+            if (!email.isNullOrBlank()) {
+                val clean = email.lowercase()
+                cachedOwnerEmail = clean
+                return clean
+            }
+        } catch (_: Exception) {}
+        cachedOwnerEmail = FirebaseConfig.OWNER_EMAIL.lowercase()
+        return cachedOwnerEmail!!
+    }
+
+    fun invalidateOwnerCache() {
+        cachedOwnerEmail = null
+    }
+
     // ============================================================
-    //  GOOGLE (kept for later — when OAuth consent is set up)
+    //  GOOGLE SIGN-IN
     // ============================================================
     suspend fun signInWithGoogleIdToken(idToken: String): Result<FirebaseUser> {
         return try {
@@ -58,32 +81,25 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  EMAIL + PASSWORD — sign-in, else auto sign-up
+    //  EMAIL + PASSWORD
     // ============================================================
-    suspend fun signInOrSignUpWithEmail(
-        email: String,
-        password: String,
-    ): Result<FirebaseUser> {
+    suspend fun signInOrSignUpWithEmail(email: String, password: String): Result<FirebaseUser> {
         val cleanEmail = email.trim().lowercase()
         return try {
-            // Try sign-in first
             var user: FirebaseUser? = null
             try {
                 val result = auth.signInWithEmailAndPassword(cleanEmail, password).await()
                 user = result.user
             } catch (signInError: Exception) {
                 Log.w(TAG, "Sign-in failed, trying sign-up: ${signInError.message}")
-                // Sign-in failed → try sign-up (new user)
                 try {
                     val result = auth.createUserWithEmailAndPassword(cleanEmail, password).await()
                     user = result.user
                 } catch (signUpError: Exception) {
                     Log.e(TAG, "Sign-up also failed", signUpError)
-                    // Both failed → return the sign-up error (usually EMAIL_IN_USE = wrong password)
                     throw signUpError
                 }
             }
-
             val finalUser = user ?: return Result.failure(Exception("No user returned"))
             ensureUserDoc(finalUser)
             loadProfileAndRole(finalUser)
@@ -109,7 +125,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  USER DOC CREATION (auto-owner for owner email)
+    //  USER DOC CREATION
     // ============================================================
     private suspend fun ensureUserDoc(user: FirebaseUser) {
         try {
@@ -118,7 +134,8 @@ class AuthManager(private val context: Context) {
             val snapshot = userRef.get().await()
 
             if (!snapshot.exists()) {
-                val isOwner = user.email?.equals(FirebaseConfig.OWNER_EMAIL, ignoreCase = true) == true
+                val ownerEmail = getOwnerEmail()
+                val isOwner = user.email?.equals(ownerEmail, ignoreCase = true) == true
                 val role = if (isOwner) "owner" else "user"
                 val referCode = generateReferCode(uid)
 
@@ -155,15 +172,16 @@ class AuthManager(private val context: Context) {
                 if (isOwner) {
                     try {
                         db.collection(FirebaseConfig.COL_ROLES)
-                            .document(hashEmail(FirebaseConfig.OWNER_EMAIL))
+                            .document(hashEmail(ownerEmail))
                             .set(
                                 mapOf(
-                                    "email" to FirebaseConfig.OWNER_EMAIL.lowercase(),
+                                    "email" to ownerEmail,
                                     "role" to "owner",
                                     "addedBy" to null,
                                     "addedAt" to nowSec(),
                                     "active" to true,
-                                )
+                                ),
+                                com.google.firebase.firestore.SetOptions.merge(),
                             ).await()
                     } catch (e: Exception) {
                         Log.w(TAG, "Owner role doc failed", e)
@@ -179,21 +197,20 @@ class AuthManager(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "ensureUserDoc failed", e)
-            // Don't fail the whole login because of this
         }
     }
 
     // ============================================================
-    //  LOAD PROFILE + ROLE (defensive — never blocks login)
+    //  LOAD PROFILE + ROLE
     // ============================================================
     private suspend fun loadProfileAndRole(user: FirebaseUser) {
         try {
             val email = user.email ?: ""
             var role = UserRole.USER
 
-            // Role check
+            val ownerEmail = getOwnerEmail()
             try {
-                if (email.equals(FirebaseConfig.OWNER_EMAIL, ignoreCase = true)) {
+                if (email.equals(ownerEmail, ignoreCase = true)) {
                     role = UserRole.OWNER
                 } else if (email.isNotBlank()) {
                     val roleDoc = db.collection(FirebaseConfig.COL_ROLES)
@@ -207,7 +224,6 @@ class AuthManager(private val context: Context) {
                 Log.w(TAG, "Role load failed, defaulting to USER", e)
             }
 
-            // Profile load (never blocks)
             var profile: UserProfile? = null
             try {
                 val profileDoc = db.collection(FirebaseConfig.COL_USERS)
@@ -241,16 +257,29 @@ class AuthManager(private val context: Context) {
                         createdAt = profileDoc.getLong("createdAt") ?: 0L,
                         lastActive = profileDoc.getLong("lastActive") ?: 0L,
                     )
+
+                    // Sync role if changed (transfer ownership case)
+                    val storedRole = profileDoc.getString("role") ?: "user"
+                    val computedRole = when (role) {
+                        UserRole.OWNER -> "owner"
+                        UserRole.SUPER_ADMIN -> "super_admin"
+                        UserRole.ADMIN -> "admin"
+                        UserRole.USER -> "user"
+                    }
+                    if (storedRole != computedRole) {
+                        try {
+                            db.collection(FirebaseConfig.COL_USERS).document(user.uid)
+                                .update("role", computedRole).await()
+                        } catch (_: Exception) {}
+                    }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Profile load failed, proceeding with null profile", e)
             }
 
-            // ALWAYS set LoggedIn — even if profile is null
             _authState.value = AuthState.LoggedIn(user, role, profile)
         } catch (e: Exception) {
             Log.e(TAG, "loadProfileAndRole crashed", e)
-            // Even on total failure, still set LoggedIn (user is authenticated)
             _authState.value = AuthState.LoggedIn(user, UserRole.USER, null)
         }
     }
