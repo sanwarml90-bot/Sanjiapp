@@ -53,21 +53,27 @@ import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.data.FirebaseNode
 import com.sanji.bomberpro.services.AdminService
 import com.sanji.bomberpro.services.AdminUser
+import com.sanji.bomberpro.services.SettingsService
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import kotlinx.coroutines.launch
 
-private enum class AdminView { HOME, FIREBASE, USERS, USER_DETAIL, ROLES }
+private enum class AdminView {
+    HOME, FIREBASE, USERS, USER_DETAIL, ROLES,
+    SETTINGS, BROADCAST, REDEEM, PRICING,
+}
 
 @Composable
 fun AdminScreen(
     adminUid: String,
     adminEmail: String,
+    adminName: String,
     isOwner: Boolean,
     onExit: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
     val scope = rememberCoroutineScope()
-    val service = remember { AdminService() }
+    val adminService = remember { AdminService() }
+    val settingsService = remember { SettingsService() }
 
     var view by remember { mutableStateOf(AdminView.HOME) }
 
@@ -86,7 +92,7 @@ fun AdminScreen(
     fun loadFirebases() {
         scope.launch {
             loadingFb = true
-            firebases = service.listFirebases()
+            firebases = adminService.listFirebases()
             loadingFb = false
         }
     }
@@ -94,7 +100,7 @@ fun AdminScreen(
     fun loadUsers() {
         scope.launch {
             loadingUsers = true
-            users = service.searchUsers(userQuery)
+            users = adminService.searchUsers(userQuery)
             loadingUsers = false
         }
     }
@@ -105,6 +111,10 @@ fun AdminScreen(
             onOpenFirebase = { loadFirebases(); view = AdminView.FIREBASE },
             onOpenUsers = { loadUsers(); view = AdminView.USERS },
             onOpenRoles = { view = AdminView.ROLES },
+            onOpenSettings = { view = AdminView.SETTINGS },
+            onOpenBroadcast = { view = AdminView.BROADCAST },
+            onOpenRedeem = { view = AdminView.REDEEM },
+            onOpenPricing = { view = AdminView.PRICING },
             onExit = onExit,
         )
 
@@ -172,7 +182,7 @@ fun AdminScreen(
                                         checked = fb.enabled,
                                         onCheckedChange = { checked ->
                                             scope.launch {
-                                                service.toggleFirebase(fb.id, checked)
+                                                adminService.toggleFirebase(fb.id, checked)
                                                 loadFirebases()
                                             }
                                         },
@@ -183,7 +193,7 @@ fun AdminScreen(
                                     )
                                     IconButton(onClick = {
                                         scope.launch {
-                                            service.deleteFirebase(fb.id)
+                                            adminService.deleteFirebase(fb.id)
                                             loadFirebases()
                                         }
                                     }) {
@@ -201,7 +211,7 @@ fun AdminScreen(
                     onDismiss = { showAddFb = false },
                     onConfirm = { url, label ->
                         scope.launch {
-                            val result = service.addFirebase(url, label)
+                            val result = adminService.addFirebase(url, label)
                             if (result.isSuccess) { showAddFb = false; loadFirebases() }
                             else error = result.exceptionOrNull()?.message
                         }
@@ -304,11 +314,11 @@ fun AdminScreen(
                 user = u,
                 adminUid = adminUid,
                 isOwner = isOwner,
-                service = service,
+                service = adminService,
                 onBack = { view = AdminView.USERS },
                 onRefresh = {
                     scope.launch {
-                        val fresh = service.getUserDetail(u.uid)
+                        val fresh = adminService.getUserDetail(u.uid)
                         if (fresh != null) selectedUser = fresh
                     }
                 },
@@ -320,12 +330,41 @@ fun AdminScreen(
                 RolesScreen(
                     adminUid = adminUid,
                     adminEmail = adminEmail,
-                    service = service,
+                    service = adminService,
                     onBack = { view = AdminView.HOME },
                 )
-            } else {
-                view = AdminView.HOME
-            }
+            } else view = AdminView.HOME
+        }
+
+        AdminView.SETTINGS -> {
+            if (isOwner) {
+                SettingsScreen(
+                    onBack = { view = AdminView.HOME },
+                    service = settingsService,
+                )
+            } else view = AdminView.HOME
+        }
+
+        AdminView.BROADCAST -> BroadcastScreen(
+            adminUid = adminUid,
+            adminName = adminName,
+            service = settingsService,
+            onBack = { view = AdminView.HOME },
+        )
+
+        AdminView.REDEEM -> RedeemCodesScreen(
+            adminUid = adminUid,
+            service = settingsService,
+            onBack = { view = AdminView.HOME },
+        )
+
+        AdminView.PRICING -> {
+            if (isOwner) {
+                PricingScreen(
+                    service = settingsService,
+                    onBack = { view = AdminView.HOME },
+                )
+            } else view = AdminView.HOME
         }
     }
 }
@@ -336,6 +375,10 @@ private fun AdminHomeMenu(
     onOpenFirebase: () -> Unit,
     onOpenUsers: () -> Unit,
     onOpenRoles: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenBroadcast: () -> Unit,
+    onOpenRedeem: () -> Unit,
+    onOpenPricing: () -> Unit,
     onExit: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
@@ -359,37 +402,21 @@ private fun AdminHomeMenu(
 
         Spacer(Modifier.height(16.dp))
 
-        AdminMenuCard(
-            emoji = "🔥",
-            title = "Manage Firebases",
-            subtitle = "Add / remove / enable realtime DB nodes",
-            onClick = onOpenFirebase,
-        )
-        AdminMenuCard(
-            emoji = "👥",
-            title = "Users",
-            subtitle = "Search, view, credits, ban, limits, notes, tags, subscription",
-            onClick = onOpenUsers,
-        )
+        AdminMenuCard("🔥", "Manage Firebases", "Add / remove / enable realtime DB nodes", onOpenFirebase)
+        AdminMenuCard("👥", "Users", "Search, view, credits, ban, limits, notes, tags, subscription", onOpenUsers)
         if (isOwner) {
-            AdminMenuCard(
-                emoji = "🔱",
-                title = "Roles & Admins",
-                subtitle = "Add/remove super admins and admins · transfer ownership",
-                onClick = onOpenRoles,
-            )
+            AdminMenuCard("🔱", "Roles & Admins", "Add/remove super admins and admins · transfer ownership", onOpenRoles)
+            AdminMenuCard("⚙️", "Settings", "OTP cost, referral rewards, UPI, maintenance, force update", onOpenSettings)
+        }
+        AdminMenuCard("📢", "Broadcast", "Send message to all users", onOpenBroadcast)
+        AdminMenuCard("🎟", "Redeem Codes", "Create / view / delete codes", onOpenRedeem)
+        if (isOwner) {
+            AdminMenuCard("💳", "Pricing", "Manage credit packs and subscription plans", onOpenPricing)
         }
 
         Spacer(Modifier.height(24.dp))
-
         Text(
-            "More coming in next sessions",
-            fontSize = 11.sp, color = colors.onSurfaceVariant,
-            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Settings · Broadcast · Redeem Codes · Pricing · Logs · Giveaways · Analytics",
+            "More coming: Logs · Giveaways · Analytics · Support tickets",
             fontSize = 10.sp, color = colors.onSurfaceVariant,
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
         )
