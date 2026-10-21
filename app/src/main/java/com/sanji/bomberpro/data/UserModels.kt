@@ -24,8 +24,10 @@ data class ActivityEntry(
 data class BlastRecord(
     val id: String = "",
     val uid: String = "",
+    val type: String = "single",
     val targetFull: String = "",
     val targetMasked: String = "",
+    val numbersCount: Int = 0,
     val message: String = "",
     val requested: Int = 0,
     val sent: Int = 0,
@@ -54,6 +56,8 @@ data class OtpRecord(
 
 data class GlobalSettings(
     val otpCost: Int = 1,
+    val creditCostPerSms: Int = 1,
+    val bulkCreditCostPerNumber: Int = 1,
     val dailyBonusCredits: Int = 2,
     val refCredits: Int = 3,
     val refCoins: Int = 1,
@@ -66,10 +70,38 @@ data class GlobalSettings(
     val upiName: String = "",
     val maintenance: Boolean = false,
     val maintenanceMsg: String = "",
+    val termsVersion: Int = 1,
+    val termsRequired: Boolean = true,
+    val forceJoinEnabled: Boolean = false,
+    val otpFreshWindowSec: Long = 900L,
 )
 
 data class ReferralResult(
     val referrerUid: String,
     val creditsAwarded: Int,
     val coinsAwarded: Int,
+)
+
+// ============================================================
+//  FORCE JOIN
+// ============================================================
+data class ForceJoinChannel(
+    val id: String = "",
+    val title: String = "",
+    val link: String = "",
+    val required: Boolean = true,
+)
+
+data class ForceJoinState(
+    val enabled: Boolean = false,
+    val channels: List<ForceJoinChannel> = emptyList(),
+    val bypass: List<String> = emptyList(),
+)
+
+// ============================================================
+//  TERMS
+// ============================================================
+data class TermsContent(
+    val version: Int = 1,
+    val text: String = "",
 )
