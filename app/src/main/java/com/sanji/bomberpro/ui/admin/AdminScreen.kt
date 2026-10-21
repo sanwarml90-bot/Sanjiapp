@@ -60,6 +60,7 @@ import kotlinx.coroutines.launch
 private enum class AdminView {
     HOME, FIREBASE, USERS, USER_DETAIL, ROLES,
     SETTINGS, BROADCAST, REDEEM, PRICING,
+    LOGS, ANALYTICS,
 }
 
 @Composable
@@ -115,6 +116,8 @@ fun AdminScreen(
             onOpenBroadcast = { view = AdminView.BROADCAST },
             onOpenRedeem = { view = AdminView.REDEEM },
             onOpenPricing = { view = AdminView.PRICING },
+            onOpenLogs = { view = AdminView.LOGS },
+            onOpenAnalytics = { view = AdminView.ANALYTICS },
             onExit = onExit,
         )
 
@@ -326,23 +329,13 @@ fun AdminScreen(
         }
 
         AdminView.ROLES -> {
-            if (isOwner) {
-                RolesScreen(
-                    adminUid = adminUid,
-                    adminEmail = adminEmail,
-                    service = adminService,
-                    onBack = { view = AdminView.HOME },
-                )
-            } else view = AdminView.HOME
+            if (isOwner) RolesScreen(adminUid = adminUid, adminEmail = adminEmail, service = adminService, onBack = { view = AdminView.HOME })
+            else view = AdminView.HOME
         }
 
         AdminView.SETTINGS -> {
-            if (isOwner) {
-                SettingsScreen(
-                    onBack = { view = AdminView.HOME },
-                    service = settingsService,
-                )
-            } else view = AdminView.HOME
+            if (isOwner) SettingsScreen(onBack = { view = AdminView.HOME }, service = settingsService)
+            else view = AdminView.HOME
         }
 
         AdminView.BROADCAST -> BroadcastScreen(
@@ -359,13 +352,13 @@ fun AdminScreen(
         )
 
         AdminView.PRICING -> {
-            if (isOwner) {
-                PricingScreen(
-                    service = settingsService,
-                    onBack = { view = AdminView.HOME },
-                )
-            } else view = AdminView.HOME
+            if (isOwner) PricingScreen(service = settingsService, onBack = { view = AdminView.HOME })
+            else view = AdminView.HOME
         }
+
+        AdminView.LOGS -> LogsScreen(onBack = { view = AdminView.HOME })
+
+        AdminView.ANALYTICS -> AnalyticsScreen(onBack = { view = AdminView.HOME })
     }
 }
 
@@ -379,6 +372,8 @@ private fun AdminHomeMenu(
     onOpenBroadcast: () -> Unit,
     onOpenRedeem: () -> Unit,
     onOpenPricing: () -> Unit,
+    onOpenLogs: () -> Unit,
+    onOpenAnalytics: () -> Unit,
     onExit: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
@@ -413,10 +408,12 @@ private fun AdminHomeMenu(
         if (isOwner) {
             AdminMenuCard("💳", "Pricing", "Manage credit packs and subscription plans", onOpenPricing)
         }
+        AdminMenuCard("📜", "Logs", "Activity · Audit · Payment history", onOpenLogs)
+        AdminMenuCard("📊", "Analytics", "Users · Revenue · Daily stats", onOpenAnalytics)
 
         Spacer(Modifier.height(24.dp))
         Text(
-            "More coming: Logs · Giveaways · Analytics · Support tickets",
+            "More coming: Giveaways · Support tickets · Appeals",
             fontSize = 10.sp, color = colors.onSurfaceVariant,
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
         )
