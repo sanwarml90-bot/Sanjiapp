@@ -56,11 +56,12 @@ import com.sanji.bomberpro.services.AdminUser
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import kotlinx.coroutines.launch
 
-private enum class AdminView { HOME, FIREBASE, USERS, USER_DETAIL }
+private enum class AdminView { HOME, FIREBASE, USERS, USER_DETAIL, ROLES }
 
 @Composable
 fun AdminScreen(
     adminUid: String,
+    adminEmail: String,
     isOwner: Boolean,
     onExit: () -> Unit,
 ) {
@@ -100,14 +101,10 @@ fun AdminScreen(
 
     when (view) {
         AdminView.HOME -> AdminHomeMenu(
-            onOpenFirebase = {
-                loadFirebases()
-                view = AdminView.FIREBASE
-            },
-            onOpenUsers = {
-                loadUsers()
-                view = AdminView.USERS
-            },
+            isOwner = isOwner,
+            onOpenFirebase = { loadFirebases(); view = AdminView.FIREBASE },
+            onOpenUsers = { loadUsers(); view = AdminView.USERS },
+            onOpenRoles = { view = AdminView.ROLES },
             onExit = onExit,
         )
 
@@ -144,10 +141,7 @@ fun AdminScreen(
                         Spacer(Modifier.height(8.dp))
                         Button(
                             onClick = { showAddFb = true },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = colors.primary,
-                                contentColor = Color.Black,
-                            ),
+                            colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
                         ) { Text("Add Firebase") }
                     }
                 }
@@ -155,18 +149,13 @@ fun AdminScreen(
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(firebases) { fb ->
                         val idx = firebases.indexOf(fb) + 1
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = colors.surface,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
+                        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(12.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             "Firebase $idx",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp, fontWeight = FontWeight.Bold,
                                             color = colors.onBackground,
                                         )
                                         Text(fb.label, fontSize = 11.sp, color = colors.onSurfaceVariant)
@@ -174,10 +163,8 @@ fun AdminScreen(
                                             Spacer(Modifier.height(4.dp))
                                             Text(
                                                 fb.url,
-                                                fontSize = 10.sp,
-                                                color = colors.onSurfaceVariant,
-                                                fontFamily = FontFamily.Monospace,
-                                                maxLines = 2,
+                                                fontSize = 10.sp, color = colors.onSurfaceVariant,
+                                                fontFamily = FontFamily.Monospace, maxLines = 2,
                                             )
                                         }
                                     }
@@ -215,12 +202,8 @@ fun AdminScreen(
                     onConfirm = { url, label ->
                         scope.launch {
                             val result = service.addFirebase(url, label)
-                            if (result.isSuccess) {
-                                showAddFb = false
-                                loadFirebases()
-                            } else {
-                                error = result.exceptionOrNull()?.message
-                            }
+                            if (result.isSuccess) { showAddFb = false; loadFirebases() }
+                            else error = result.exceptionOrNull()?.message
                         }
                     },
                     error = error,
@@ -249,10 +232,7 @@ fun AdminScreen(
 
             OutlinedTextField(
                 value = userQuery,
-                onValueChange = {
-                    userQuery = it
-                    loadUsers()
-                },
+                onValueChange = { userQuery = it; loadUsers() },
                 leadingIcon = { Icon(Icons.Default.Search, null, tint = colors.onSurfaceVariant) },
                 placeholder = { Text("Search by name / email / uid") },
                 singleLine = true,
@@ -273,10 +253,7 @@ fun AdminScreen(
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(users) { u ->
                         Surface(
-                            onClick = {
-                                selectedUser = u
-                                view = AdminView.USER_DETAIL
-                            },
+                            onClick = { selectedUser = u; view = AdminView.USER_DETAIL },
                             shape = RoundedCornerShape(12.dp),
                             color = colors.surface,
                             modifier = Modifier.fillMaxWidth(),
@@ -286,8 +263,7 @@ fun AdminScreen(
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
                                             u.displayName,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                                             color = colors.onBackground,
                                         )
                                         if (u.banned) {
@@ -298,16 +274,12 @@ fun AdminScreen(
                                             Spacer(Modifier.width(6.dp))
                                             Text(
                                                 u.role.replace('_', ' ').uppercase(),
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 9.sp, fontWeight = FontWeight.Bold,
                                                 color = colors.primary,
                                             )
                                         }
                                     }
-                                    Text(
-                                        u.email, fontSize = 10.sp,
-                                        color = colors.onSurfaceVariant, maxLines = 1,
-                                    )
+                                    Text(u.email, fontSize = 10.sp, color = colors.onSurfaceVariant, maxLines = 1)
                                     Text(
                                         "UID: ${u.uid}",
                                         fontSize = 9.sp, color = colors.onSurfaceVariant,
@@ -316,8 +288,7 @@ fun AdminScreen(
                                 }
                                 Text(
                                     "💰${u.credits} 🪙${u.coins}",
-                                    fontSize = 10.sp, color = colors.primary,
-                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 10.sp, color = colors.primary, fontWeight = FontWeight.SemiBold,
                                 )
                             }
                         }
@@ -328,22 +299,32 @@ fun AdminScreen(
 
         AdminView.USER_DETAIL -> {
             val u = selectedUser
-            if (u == null) {
-                view = AdminView.USERS
-            } else {
-                UserDetailSection(
-                    user = u,
+            if (u == null) view = AdminView.USERS
+            else UserDetailSection(
+                user = u,
+                adminUid = adminUid,
+                isOwner = isOwner,
+                service = service,
+                onBack = { view = AdminView.USERS },
+                onRefresh = {
+                    scope.launch {
+                        val fresh = service.getUserDetail(u.uid)
+                        if (fresh != null) selectedUser = fresh
+                    }
+                },
+            )
+        }
+
+        AdminView.ROLES -> {
+            if (isOwner) {
+                RolesScreen(
                     adminUid = adminUid,
-                    isOwner = isOwner,
+                    adminEmail = adminEmail,
                     service = service,
-                    onBack = { view = AdminView.USERS },
-                    onRefresh = {
-                        scope.launch {
-                            val fresh = service.getUserDetail(u.uid)
-                            if (fresh != null) selectedUser = fresh
-                        }
-                    },
+                    onBack = { view = AdminView.HOME },
                 )
+            } else {
+                view = AdminView.HOME
             }
         }
     }
@@ -351,8 +332,10 @@ fun AdminScreen(
 
 @Composable
 private fun AdminHomeMenu(
+    isOwner: Boolean,
     onOpenFirebase: () -> Unit,
     onOpenUsers: () -> Unit,
+    onOpenRoles: () -> Unit,
     onExit: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
@@ -388,6 +371,14 @@ private fun AdminHomeMenu(
             subtitle = "Search, view, credits, ban, limits, notes, tags, subscription",
             onClick = onOpenUsers,
         )
+        if (isOwner) {
+            AdminMenuCard(
+                emoji = "🔱",
+                title = "Roles & Admins",
+                subtitle = "Add/remove super admins and admins · transfer ownership",
+                onClick = onOpenRoles,
+            )
+        }
 
         Spacer(Modifier.height(24.dp))
 
@@ -398,7 +389,7 @@ private fun AdminHomeMenu(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "Roles · Settings · Broadcast · Redeem Codes · Pricing · Logs · Giveaways · Analytics",
+            "Settings · Broadcast · Redeem Codes · Pricing · Logs · Giveaways · Analytics",
             fontSize = 10.sp, color = colors.onSurfaceVariant,
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
         )
