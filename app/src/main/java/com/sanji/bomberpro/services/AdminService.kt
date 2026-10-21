@@ -36,6 +36,19 @@ data class AdminUser(
     val termsAccepted: Boolean = false,
 )
 
+data class RoleEntry(
+    val email: String,
+    val role: String,
+    val addedBy: String,
+    val addedAt: Long,
+)
+
+data class RolesList(
+    val owner: String,
+    val superAdmins: List<RoleEntry>,
+    val admins: List<RoleEntry>,
+)
+
 class AdminService {
 
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance()
@@ -254,12 +267,7 @@ class AdminService {
         withContext(Dispatchers.IO) {
             try {
                 db.collection(FirebaseConfig.COL_USERS).document(uid)
-                    .update(
-                        mapOf(
-                            "banned" to true,
-                            "banReason" to reason.take(200),
-                        )
-                    ).await()
+                    .update(mapOf("banned" to true, "banReason" to reason.take(200))).await()
                 logAudit(adminUid, "admin_ban", uid, 0, reason)
                 true
             } catch (e: Exception) {
@@ -271,12 +279,7 @@ class AdminService {
         withContext(Dispatchers.IO) {
             try {
                 db.collection(FirebaseConfig.COL_USERS).document(uid)
-                    .update(
-                        mapOf(
-                            "banned" to false,
-                            "banReason" to "",
-                        )
-                    ).await()
+                    .update(mapOf("banned" to false, "banReason" to "")).await()
                 logAudit(adminUid, "admin_unban", uid, 0, "")
                 true
             } catch (e: Exception) {
@@ -291,11 +294,8 @@ class AdminService {
         withContext(Dispatchers.IO) {
             try {
                 val ref = db.collection(FirebaseConfig.COL_USERS).document(uid)
-                if (limit == null) {
-                    ref.update("maxSendLimit", FieldValue.delete()).await()
-                } else {
-                    ref.update("maxSendLimit", limit.toLong()).await()
-                }
+                if (limit == null) ref.update("maxSendLimit", FieldValue.delete()).await()
+                else ref.update("maxSendLimit", limit.toLong()).await()
                 logAudit(adminUid, "admin_set_send_limit", uid, limit ?: -1, "")
                 true
             } catch (e: Exception) {
@@ -307,11 +307,8 @@ class AdminService {
         withContext(Dispatchers.IO) {
             try {
                 val ref = db.collection(FirebaseConfig.COL_USERS).document(uid)
-                if (limit == null) {
-                    ref.update("maxOtpLimit", FieldValue.delete()).await()
-                } else {
-                    ref.update("maxOtpLimit", limit.toLong()).await()
-                }
+                if (limit == null) ref.update("maxOtpLimit", FieldValue.delete()).await()
+                else ref.update("maxOtpLimit", limit.toLong()).await()
                 logAudit(adminUid, "admin_set_otp_limit", uid, limit ?: -1, "")
                 true
             } catch (e: Exception) {
@@ -403,6 +400,214 @@ class AdminService {
         }
 
     // ============================================================
+    //  ROLES
+    // ============================================================
+    suspend fun getOwnerEmail(): String = withContext(Dispatchers.IO) {
+        try {
+            val doc = db.collection(FirebaseConfig.COL_SETTINGS)
+                .document(FirebaseConfig.DOC_GLOBAL_SETTINGS)
+                .get().await()
+            val email = doc.getString("ownerEmail")
+            if (!email.isNullOrBlank()) email.lowercase() else FirebaseConfig.OWNER_EMAIL.lowercase()
+        } catch (e: Exception) {
+            FirebaseConfig.OWNER_EMAIL.lowercase()
+        }
+    }
+
+    suspend fun listRoles(): RolesList = withContext(Dispatchers.IO) {
+        val owner = getOwnerEmail()
+        val superAdmins = mutableListOf<RoleEntry>()
+        val admins = mutableListOf<RoleEntry>()
+
+        try {
+            val docs = db.collection(FirebaseConfig.COL_ROLES).get().await()
+            for (d in docs.documents) {
+                val email = d.getString("email") ?: continue
+                val role = d.getString("role") ?: continue
+                val active = d.getBoolean("active") ?: true
+                if (!active) continue
+                if (email.equals(owner, ignoreCase = true)) continue
+
+                val entry = RoleEntry(
+                    email = email,
+                    role = role,
+                    addedBy = d.getString("addedBy") ?: "",
+                    addedAt = d.getLong("addedAt") ?: 0L,
+                )
+                when (role) {
+                    "super_admin" -> superAdmins.add(entry)
+                    "admin" -> admins.add(entry)
+                }
+            }
+        } catch (_: Exception) {}
+
+        RolesList(
+            owner = owner,
+            superAdmins = superAdmins.sortedBy { it.email },
+            admins = admins.sortedBy { it.email },
+        )
+    }
+
+    suspend fun addRole(
+        email: String,
+        role: String,     // "admin" or "super_admin"
+        addedByEmail: String,
+        adminUid: String,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val cleanEmail = email.trim().lowercase()
+            if (cleanEmail.isBlank() || !cleanEmail.contains("@")) {
+                return@withContext Result.failure(Exception("Invalid email"))
+            }
+            if (role !in listOf("admin", "super_admin")) {
+                return@withContext Result.failure(Exception("Invalid role"))
+            }
+            if (cleanEmail == getOwnerEmail()) {
+                return@withContext Result.failure(Exception("Email is the owner"))
+            }
+
+            val hash = hashEmail(cleanEmail)
+            val existing = db.collection(FirebaseConfig.COL_ROLES).document(hash).get().await()
+            if (existing.exists()) {
+                val existingRole = existing.getString("role")
+                if (existingRole != null && existingRole != "user") {
+                    return@withContext Result.failure(Exception("Already has role: $existingRole"))
+                }
+            }
+
+            // Write roles doc
+            db.collection(FirebaseConfig.COL_ROLES).document(hash).set(
+                mapOf(
+                    "email" to cleanEmail,
+                    "role" to role,
+                    "addedBy" to addedByEmail.lowercase(),
+                    "addedAt" to System.currentTimeMillis() / 1000L,
+                    "active" to true,
+                )
+            ).await()
+
+            // Update users doc if exists
+            try {
+                val usersSnap = db.collection(FirebaseConfig.COL_USERS)
+                    .whereEqualTo("email", cleanEmail)
+                    .limit(1).get().await()
+                if (!usersSnap.isEmpty) {
+                    usersSnap.documents.first().reference.update("role", role).await()
+                }
+            } catch (_: Exception) {}
+
+            logAudit(adminUid, "admin_add_role", 0, 0, "$cleanEmail=$role")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun removeRole(
+        email: String,
+        adminUid: String,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val cleanEmail = email.trim().lowercase()
+            if (cleanEmail == getOwnerEmail()) {
+                return@withContext Result.failure(Exception("Cannot remove owner"))
+            }
+            val hash = hashEmail(cleanEmail)
+            db.collection(FirebaseConfig.COL_ROLES).document(hash)
+                .update("active", false).await()
+
+            // Reset user doc role
+            try {
+                val usersSnap = db.collection(FirebaseConfig.COL_USERS)
+                    .whereEqualTo("email", cleanEmail)
+                    .limit(1).get().await()
+                if (!usersSnap.isEmpty) {
+                    usersSnap.documents.first().reference.update("role", "user").await()
+                }
+            } catch (_: Exception) {}
+
+            logAudit(adminUid, "admin_remove_role", 0, 0, cleanEmail)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun transferOwnership(
+        newOwnerEmail: String,
+        currentOwnerUid: String,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val cleanNew = newOwnerEmail.trim().lowercase()
+            if (cleanNew.isBlank() || !cleanNew.contains("@")) {
+                return@withContext Result.failure(Exception("Invalid email"))
+            }
+            val currentOwner = getOwnerEmail()
+            if (cleanNew == currentOwner) {
+                return@withContext Result.failure(Exception("Already owner"))
+            }
+
+            // 1. Update settings.ownerEmail
+            db.collection(FirebaseConfig.COL_SETTINGS)
+                .document(FirebaseConfig.DOC_GLOBAL_SETTINGS)
+                .set(
+                    mapOf("ownerEmail" to cleanNew),
+                    com.google.firebase.firestore.SetOptions.merge(),
+                ).await()
+
+            // 2. Demote old owner to super_admin
+            val oldHash = hashEmail(currentOwner)
+            db.collection(FirebaseConfig.COL_ROLES).document(oldHash).set(
+                mapOf(
+                    "email" to currentOwner,
+                    "role" to "super_admin",
+                    "addedBy" to cleanNew,
+                    "addedAt" to System.currentTimeMillis() / 1000L,
+                    "active" to true,
+                ),
+                com.google.firebase.firestore.SetOptions.merge(),
+            ).await()
+
+            // 3. Promote new owner
+            val newHash = hashEmail(cleanNew)
+            db.collection(FirebaseConfig.COL_ROLES).document(newHash).set(
+                mapOf(
+                    "email" to cleanNew,
+                    "role" to "owner",
+                    "addedBy" to currentOwner,
+                    "addedAt" to System.currentTimeMillis() / 1000L,
+                    "active" to true,
+                ),
+                com.google.firebase.firestore.SetOptions.merge(),
+            ).await()
+
+            // 4. Update users docs
+            try {
+                val newUserSnap = db.collection(FirebaseConfig.COL_USERS)
+                    .whereEqualTo("email", cleanNew)
+                    .limit(1).get().await()
+                if (!newUserSnap.isEmpty) {
+                    newUserSnap.documents.first().reference.update("role", "owner").await()
+                }
+                val oldUserSnap = db.collection(FirebaseConfig.COL_USERS)
+                    .whereEqualTo("email", currentOwner)
+                    .limit(1).get().await()
+                if (!oldUserSnap.isEmpty) {
+                    oldUserSnap.documents.first().reference.update("role", "super_admin").await()
+                }
+            } catch (_: Exception) {}
+
+            logAudit(currentOwnerUid, "admin_transfer_owner", 0, 0, "$currentOwner->$cleanNew")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun hashEmail(email: String): String =
+        email.lowercase().trim().replace("@", "_at_").replace(".", "_dot_")
+
+    // ============================================================
     //  LOGGING
     // ============================================================
     private suspend fun logTransaction(uid: String, type: String, delta: Int, reason: String) {
@@ -422,7 +627,7 @@ class AdminService {
     private suspend fun logAudit(
         adminUid: String,
         action: String,
-        targetUid: String,
+        targetUid: Int,
         amount: Int,
         reason: String,
     ) {
