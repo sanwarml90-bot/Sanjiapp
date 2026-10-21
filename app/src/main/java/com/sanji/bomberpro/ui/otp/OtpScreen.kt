@@ -24,7 +24,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Notifications
@@ -32,7 +31,6 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -60,7 +58,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.data.OtpMessage
 import com.sanji.bomberpro.services.Device
-import com.sanji.bomberpro.services.OtpExtractor
 import com.sanji.bomberpro.services.OtpFavoritesService
 import com.sanji.bomberpro.services.OtpService
 import com.sanji.bomberpro.services.RealtimeDbService
@@ -121,16 +118,7 @@ fun OtpScreen(
     var keywordInput by remember { mutableStateOf("") }
     var loadingAction by remember { mutableStateOf(false) }
 
-    // Initial load
-    LaunchedEffect(Unit) {
-        coins = userData.getCoins(uid)
-        otpCost = userData.getGlobalSettings().otpCost
-        keyword = favSvc.getWatchKeyword(uid)
-        keywordInput = keyword
-        favorites = favSvc.listFavorites(uid)
-        scanDevices()
-    }
-
+    // Local function — must be declared before use
     suspend fun scanDevices() {
         scanning = true
         error = null
@@ -150,24 +138,27 @@ fun OtpScreen(
         cm.setPrimaryClip(ClipData.newPlainText(label, value))
     }
 
-    // Main layout
+    LaunchedEffect(Unit) {
+        coins = userData.getCoins(uid)
+        otpCost = userData.getGlobalSettings().otpCost
+        keyword = favSvc.getWatchKeyword(uid)
+        keywordInput = keyword
+        favorites = favSvc.listFavorites(uid)
+        scanDevices()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background)
             .padding(16.dp),
     ) {
-        // Top bar
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = {
                 if (view == OtpView.LIST) onBack()
                 else view = OtpView.LIST
             }) {
-                Icon(
-                    imageVector = if (view == OtpView.LIST) Icons.Default.ArrowBack else Icons.Default.ArrowBack,
-                    contentDescription = "Back",
-                    tint = colors.onBackground,
-                )
+                Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
             }
             Spacer(Modifier.weight(1f))
             when (view) {
@@ -188,7 +179,6 @@ fun OtpScreen(
 
         Spacer(Modifier.height(8.dp))
 
-        // Balance chip
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -468,9 +458,6 @@ fun OtpScreen(
     }
 }
 
-// ============================================================
-//  DEVICE LIST
-// ============================================================
 @Composable
 private fun DeviceListSection(
     devices: List<Device>,
@@ -512,421 +499,3 @@ private fun DeviceListSection(
             }
         }
         return
-    }
-
-    if (filtered.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = if (devices.isEmpty()) "No devices online" else "No matches",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colors.onBackground,
-                )
-                Spacer(Modifier.height(8.dp))
-                TextButton(onClick = onRefresh) {
-                    Text("Refresh", color = colors.primary)
-                }
-            }
-        }
-        return
-    }
-
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(filtered) { dv ->
-            DeviceCard(device = dv, onClick = { onSelect(dv) })
-        }
-    }
-}
-
-@Composable
-private fun DeviceCard(device: Device, onClick: () -> Unit) {
-    val colors = LocalSanjiColors.current
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(14.dp),
-        color = colors.surface,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = device.deviceName.ifBlank { "Unknown device" },
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colors.onBackground,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = device.phone ?: "no number",
-                    fontSize = 11.sp,
-                    color = colors.onSurfaceVariant,
-                    fontFamily = FontFamily.Monospace,
-                )
-                Spacer(Modifier.height(2.dp))
-                Row {
-                    Text(
-                        text = "🔑 ${device.shortId}",
-                        fontSize = 10.sp,
-                        color = colors.primary,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                    if (device.battery != null) {
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = "🔋${device.battery}%",
-                            fontSize = 10.sp,
-                            color = colors.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-            Icon(Icons.Default.ChevronRight, null, tint = colors.onSurfaceVariant)
-        }
-    }
-}
-
-// ============================================================
-//  DEVICE DETAIL
-// ============================================================
-@Composable
-private fun DeviceDetailSection(
-    device: Device,
-    otpCost: Int,
-    coins: Int,
-    loading: Boolean,
-    onFetchNew: () -> Unit,
-    onFetchOld: () -> Unit,
-    onMessages: () -> Unit,
-    onLive: () -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface) {
-            Column(Modifier.padding(14.dp)) {
-                DetailRow("Name", device.deviceName)
-                DetailRow("Phone", device.phone ?: "—")
-                DetailRow("Code", device.shortId)
-                DetailRow("Firebase", device.firebaseLabel)
-                DetailRow("Battery", device.battery?.let { "$it%" } ?: "—")
-                DetailRow("Cost / fetch", "$otpCost coins")
-                DetailRow("Your coins", "$coins")
-            }
-        }
-
-        ActionRow(
-            label = "🆕 NEW — today's OTPs",
-            detail = "Fresh from midnight IST · costs $otpCost coins on success",
-            enabled = !loading,
-            onClick = onFetchNew,
-        )
-        ActionRow(
-            label = "📜 OLD — all OTPs",
-            detail = "Every OTP available · costs $otpCost coins on success",
-            enabled = !loading,
-            onClick = onFetchOld,
-        )
-        ActionRow(
-            label = "⏱ LIVE — watch for new",
-            detail = "Polls every 4s · costs $otpCost coins per new OTP",
-            enabled = !loading,
-            onClick = onLive,
-        )
-        ActionRow(
-            label = "📬 Last messages",
-            detail = "Free · preview last 300 messages",
-            enabled = !loading,
-            onClick = onMessages,
-        )
-
-        if (loading) {
-            Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = colors.primary)
-            }
-        }
-    }
-}
-
-@Composable
-private fun DetailRow(label: String, value: String) {
-    val colors = LocalSanjiColors.current
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(label, fontSize = 12.sp, color = colors.onSurfaceVariant)
-        Text(value, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
-    }
-}
-
-@Composable
-private fun ActionRow(
-    label: String,
-    detail: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-    Surface(
-        onClick = { if (enabled) onClick() },
-        shape = RoundedCornerShape(14.dp),
-        color = colors.surface,
-        enabled = enabled,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(14.dp)) {
-            Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
-            Spacer(Modifier.height(2.dp))
-            Text(detail, fontSize = 11.sp, color = colors.onSurfaceVariant)
-        }
-    }
-}
-
-// ============================================================
-//  FETCH RESULT
-// ============================================================
-@Composable
-private fun FetchResultSection(
-    mode: String,
-    messages: List<OtpMessage>,
-    onCopy: (String) -> Unit,
-    onFavorite: (OtpMessage) -> Unit,
-    onBack: () -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-
-    if (messages.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = if (mode == "msgs") "No messages" else "No OTPs found",
-                    fontSize = 14.sp,
-                    color = colors.onBackground,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = if (mode == "new") "Try OLD or LIVE mode" else "Try LIVE mode",
-                    fontSize = 11.sp,
-                    color = colors.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(12.dp))
-                TextButton(onClick = onBack) { Text("Back", color = colors.primary) }
-            }
-        }
-        return
-    }
-
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(messages) { m ->
-            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface) {
-                Column(Modifier.padding(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            if (m.otps.isNotEmpty()) {
-                                Text(
-                                    text = m.otps.joinToString(", "),
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colors.primary,
-                                    fontFamily = FontFamily.Monospace,
-                                )
-                            } else {
-                                Text("no OTP", fontSize = 12.sp, color = colors.onSurfaceVariant)
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = "📤 ${m.sender}",
-                                fontSize = 12.sp,
-                                color = colors.onBackground,
-                            )
-                            Text(
-                                text = "🕐 ${formatIstShort(m.ts)}",
-                                fontSize = 11.sp,
-                                color = colors.onSurfaceVariant,
-                            )
-                        }
-                        if (m.otps.isNotEmpty()) {
-                            IconButton(onClick = { onCopy(m.otps.first()) }) {
-                                Icon(Icons.Default.ContentCopy, "Copy", tint = colors.primary)
-                            }
-                            IconButton(onClick = { onFavorite(m) }) {
-                                Icon(Icons.Default.StarBorder, "Fav", tint = colors.primary)
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Text(m.body, fontSize = 11.sp, color = colors.onSurfaceVariant)
-                }
-            }
-        }
-    }
-}
-
-// ============================================================
-//  LIVE
-// ============================================================
-@Composable
-private fun LiveSection(
-    otps: List<OtpMessage>,
-    coinsSpent: Int,
-    coinsLeft: Int,
-    running: Boolean,
-    onCopy: (String) -> Unit,
-    onStop: () -> Unit,
-    onBack: () -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-    Column(modifier = Modifier.fillMaxSize()) {
-        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (running) "🟢 Watching…" else "⏹ Stopped",
-                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.primary,
-                    )
-                    Text("Poll every 4s · coins spent: $coinsSpent · left: $coinsLeft", fontSize = 11.sp, color = colors.onSurfaceVariant)
-                }
-                if (running) {
-                    Button(
-                        onClick = onStop,
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.error, contentColor = Color.White),
-                    ) { Text("STOP") }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        if (otps.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Waiting for new OTPs…", color = colors.onSurfaceVariant, fontSize = 12.sp)
-            }
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(otps.reversed()) { m ->
-                    Surface(shape = RoundedCornerShape(14.dp), color = colors.surface) {
-                        Column(Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        text = m.otps.joinToString(", "),
-                                        fontSize = 18.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colors.primary,
-                                        fontFamily = FontFamily.Monospace,
-                                    )
-                                    Text("📤 ${m.sender}", fontSize = 12.sp, color = colors.onBackground)
-                                    Text("🕐 ${formatIstFull(m.ts)}", fontSize = 11.sp, color = colors.onSurfaceVariant)
-                                }
-                                if (m.otps.isNotEmpty()) {
-                                    IconButton(onClick = { onCopy(m.otps.first()) }) {
-                                        Icon(Icons.Default.ContentCopy, "Copy", tint = colors.primary)
-                                    }
-                                }
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            Text(m.body, fontSize = 11.sp, color = colors.onSurfaceVariant)
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-        TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-            Text("← Back", color = colors.onSurfaceVariant)
-        }
-    }
-}
-
-// ============================================================
-//  FAVORITES
-// ============================================================
-@Composable
-private fun FavoritesSection(
-    favorites: List<com.sanji.bomberpro.services.OtpFavorite>,
-    onCopy: (String) -> Unit,
-    onRemove: (String) -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-    if (favorites.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No favorites yet", color = colors.onSurfaceVariant, fontSize = 13.sp)
-        }
-        return
-    }
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(favorites) { f ->
-            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = f.otp,
-                            fontSize = 16.sp, fontWeight = FontWeight.Bold,
-                            color = colors.primary, fontFamily = FontFamily.Monospace,
-                        )
-                        Text("📤 ${f.sender}", fontSize = 11.sp, color = colors.onBackground)
-                        Text("🕐 ${formatIstShort(f.savedAt)}", fontSize = 10.sp, color = colors.onSurfaceVariant)
-                    }
-                    IconButton(onClick = { onCopy(f.otp) }) {
-                        Icon(Icons.Default.ContentCopy, "Copy", tint = colors.primary)
-                    }
-                    IconButton(onClick = { onRemove(f.id) }) {
-                        Icon(Icons.Default.Delete, "Delete", tint = colors.error)
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ============================================================
-//  KEYWORD
-// ============================================================
-@Composable
-private fun KeywordSection(
-    keywordInput: String,
-    onChange: (String) -> Unit,
-    currentKeyword: String,
-    onSave: () -> Unit,
-    onClear: () -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(
-            "When any device message contains this keyword, you get alerted on next OTP fetch.",
-            fontSize = 12.sp, color = colors.onSurfaceVariant,
-        )
-        OutlinedTextField(
-            value = keywordInput,
-            onValueChange = onChange,
-            label = { Text("Keyword (e.g. flipkart, amazon)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Button(
-            onClick = onSave,
-            modifier = Modifier.fillMaxWidth().height(50.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
-        ) { Text("Save Keyword") }
-        if (currentKeyword.isNotBlank()) {
-            TextButton(onClick = onClear, modifier = Modifier.fillMaxWidth()) {
-                Text("Clear keyword", color = colors.error)
-            }
-        }
-    }
-}
