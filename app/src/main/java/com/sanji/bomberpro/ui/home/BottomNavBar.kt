@@ -2,6 +2,7 @@ package com.sanji.bomberpro.ui.home
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Send
@@ -17,9 +18,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.theme.LocalSanjiColors
 
-enum class HomeTab(val label: String, val icon: ImageVector) {
+enum class HomeTab(
+    val label: String,
+    val icon: ImageVector,
+    val forAdmin: Boolean = true,
+    val forUser: Boolean = true,
+) {
     HOME("Home", Icons.Default.Home),
-    BLAST("Blast", Icons.Default.Send),
+    BLAST("Blast", Icons.Default.Send, forAdmin = false),
+    ADMIN("Admin", Icons.Default.AdminPanelSettings, forUser = false),
     OTP("OTP", Icons.Default.VpnKey),
     HISTORY("History", Icons.Default.History),
     WALLET("Wallet", Icons.Default.AccountBalanceWallet),
@@ -28,20 +35,25 @@ enum class HomeTab(val label: String, val icon: ImageVector) {
 @Composable
 fun BottomNavBar(
     current: HomeTab,
+    isAdmin: Boolean,
     onTabSelect: (HomeTab) -> Unit,
 ) {
     val colors = LocalSanjiColors.current
+
+    val tabs = HomeTab.entries.filter { tab ->
+        if (isAdmin) tab.forAdmin else tab.forUser
+    }
 
     NavigationBar(
         containerColor = colors.surface,
         tonalElevation = 0.dp,
     ) {
-        HomeTab.entries.forEach { tab ->
+        tabs.forEach { tab ->
             NavigationBarItem(
                 selected = current == tab,
                 onClick = { onTabSelect(tab) },
                 icon = { Icon(tab.icon, contentDescription = tab.label) },
-                label = { Text(tab.label, fontSize = 11.sp) },
+                label = { Text(tab.label, fontSize = 10.sp) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = colors.primary,
                     selectedTextColor = colors.primary,
