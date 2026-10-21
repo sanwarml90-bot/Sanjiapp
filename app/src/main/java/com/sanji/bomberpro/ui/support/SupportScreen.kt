@@ -77,13 +77,13 @@ fun SupportScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
 
-    suspend fun refresh() {
+    suspend fun refreshInternal() {
         loading = true
         tickets = service.listMyTickets(uid)
         loading = false
     }
 
-    LaunchedEffect(Unit) { refresh() }
+    LaunchedEffect(Unit) { refreshInternal() }
 
     when (view) {
         SupportView.LIST -> Column(
@@ -98,7 +98,7 @@ fun SupportScreen(
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                     color = colors.onBackground, modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = { scope.launch { refresh() } }) {
+                IconButton(onClick = { scope.launch { refreshInternal() } }) {
                     Icon(Icons.Default.Refresh, "Refresh", tint = colors.primary)
                 }
                 IconButton(onClick = { view = SupportView.NEW; newText = ""; error = null }) {
@@ -210,7 +210,7 @@ fun SupportScreen(
                         if (result.isSuccess) {
                             newText = ""
                             view = SupportView.LIST
-                            refresh()
+                            refreshInternal()
                         } else {
                             error = result.exceptionOrNull()?.message
                         }
@@ -239,7 +239,7 @@ fun SupportScreen(
         SupportView.DETAIL -> {
             val t = selectedTicket
             if (t == null) {
-                view = SupportView.LIST
+                LaunchedEffect(Unit) { view = SupportView.LIST }
             } else {
                 Column(
                     modifier = Modifier
@@ -248,7 +248,10 @@ fun SupportScreen(
                         .padding(16.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { view = SupportView.LIST; refresh() }) {
+                        IconButton(onClick = {
+                            view = SupportView.LIST
+                            scope.launch { refreshInternal() }
+                        }) {
                             Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
                         }
                         Text(
