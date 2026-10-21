@@ -37,7 +37,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,7 +61,6 @@ import com.sanji.bomberpro.ui.blast.SmsBlastScreen
 import com.sanji.bomberpro.ui.history.HistoryScreen
 import com.sanji.bomberpro.ui.otp.OtpScreen
 import com.sanji.bomberpro.ui.wallet.WalletScreen
-import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
@@ -73,7 +71,6 @@ fun HomeScreen(
     onNavigate: (String) -> Unit,
 ) {
     val colors = LocalSanjiColors.current
-    val scope = rememberCoroutineScope()
     var currentTab by remember { mutableStateOf(HomeTab.HOME) }
 
     val isAdmin = role.priority >= UserRole.ADMIN.priority
@@ -179,6 +176,8 @@ fun HomeScreen(
                     userName = userName,
                     userEmail = userEmail,
                     onBack = { currentTab = HomeTab.HOME },
+                    onOpenTransfer = { onNavigate(Routes.TRANSFER) },
+                    onOpenGift = { onNavigate(Routes.GIFT) },
                 )
             }
         }
@@ -219,7 +218,6 @@ private fun HomeTabContent(
             .verticalScroll(scrollState)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        // header row
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (profile?.photoUrl?.isNotBlank() == true) {
                 AsyncImage(
@@ -259,7 +257,6 @@ private fun HomeTabContent(
                 )
             }
 
-            // Notifications bell
             Box(modifier = Modifier.size(42.dp)) {
                 Surface(
                     onClick = onOpenNotifications,
@@ -293,7 +290,6 @@ private fun HomeTabContent(
 
             Spacer(Modifier.width(8.dp))
 
-            // Settings
             Surface(
                 onClick = onOpenSettings,
                 shape = CircleShape,
@@ -335,7 +331,6 @@ private fun HomeTabContent(
 
         Spacer(Modifier.height(20.dp))
 
-        // Big blast button
         Surface(
             onClick = onStartBlast,
             modifier = Modifier.fillMaxWidth().height(120.dp),
@@ -358,7 +353,6 @@ private fun HomeTabContent(
 
         Spacer(Modifier.height(20.dp))
 
-        // Stats
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             StatCard(Icons.Default.Send, "Total SMS", "$liveTotalSms", Modifier.weight(1f))
             StatCard(Icons.Default.VpnKey, "OTPs", "$liveTotalOtps", Modifier.weight(1f))
@@ -385,7 +379,7 @@ private fun HomeTabContent(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             QuickAccessChip(Icons.Default.SwapHoriz, "Transfer", onOpenTransfer, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.CardGiftcard, "Gift", onOpenGift, Modifier.weight(1f))
-            QuickAccessChip(Icons.Default.WorkspacePremium, "Bulk", { onStartBlast() }, Modifier.weight(1f))
+            QuickAccessChip(Icons.Default.WorkspacePremium, "Templates", onOpenTemplates, Modifier.weight(1f))
         }
 
         Spacer(Modifier.height(8.dp))
