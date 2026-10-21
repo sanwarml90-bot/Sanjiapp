@@ -18,11 +18,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Toll
 import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.Button
@@ -33,7 +35,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -75,6 +76,8 @@ fun WalletScreen(
     userName: String,
     userEmail: String,
     onBack: () -> Unit,
+    onOpenTransfer: (() -> Unit)? = null,
+    onOpenGift: (() -> Unit)? = null,
 ) {
     val colors = LocalSanjiColors.current
     val scope = rememberCoroutineScope()
@@ -178,6 +181,7 @@ fun WalletScreen(
 
         Spacer(Modifier.height(12.dp))
 
+        // balance card
         Surface(
             shape = RoundedCornerShape(24.dp),
             color = Color.Transparent,
@@ -214,6 +218,7 @@ fun WalletScreen(
 
         Spacer(Modifier.height(16.dp))
 
+        // action row
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ActionButton(Icons.Default.ShoppingCart, "Buy", {
                 if (packs.isNotEmpty()) buyTarget = BuyTarget.Credits(packs.first())
@@ -231,6 +236,19 @@ fun WalletScreen(
                     }
                 }
             }, Modifier.weight(1f))
+        }
+
+        // transfer / gift row
+        if (onOpenTransfer != null || onOpenGift != null) {
+            Spacer(Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (onOpenTransfer != null) {
+                    ActionButton(Icons.Default.SwapHoriz, "Transfer", { onOpenTransfer() }, Modifier.weight(1f))
+                }
+                if (onOpenGift != null) {
+                    ActionButton(Icons.Default.CardGiftcard, "Gift", { onOpenGift() }, Modifier.weight(1f))
+                }
+            }
         }
 
         if (subPlan != "free" && subExpiresAt > System.currentTimeMillis() / 1000L) {
@@ -454,6 +472,12 @@ private fun humanType(type: String): String = when (type) {
     "referral_bonus" -> "Referral bonus"
     "redeem_credit" -> "Redeem credit"
     "redeem_coin" -> "Redeem coin"
+    "credit_transfer_in" -> "Transfer in"
+    "credit_transfer_out" -> "Transfer out"
+    "coin_transfer_in" -> "Coins in"
+    "coin_transfer_out" -> "Coins out"
+    "coin_gift_in" -> "Gift received"
+    "coin_gift_out" -> "Gift sent"
     else -> type.replace('_', ' ').replaceFirstChar { it.uppercase() }
 }
 
