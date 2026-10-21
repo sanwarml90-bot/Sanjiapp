@@ -76,6 +76,9 @@ fun HomeScreen(
     val liveTotalSms = (userMap["totalSms"] as? Number)?.toInt() ?: (profile?.totalSms ?: 0)
     val liveTotalOtps = (userMap["totalOtps"] as? Number)?.toInt() ?: (profile?.totalOtps ?: 0)
 
+    val userName = profile?.displayName ?: (user.displayName ?: "User")
+    val userEmail = profile?.email ?: (user.email ?: "")
+
     Scaffold(
         containerColor = colors.background,
         bottomBar = {
@@ -100,8 +103,8 @@ fun HomeScreen(
                 HomeTab.BLAST -> PlaceholderScreen("SMS Blast", "Tap START on home")
                 HomeTab.OTP -> OtpScreen(
                     uid = user.uid,
-                    userName = profile?.displayName ?: (user.displayName ?: "User"),
-                    userEmail = profile?.email ?: (user.email ?: ""),
+                    userName = userName,
+                    userEmail = userEmail,
                     isAdmin = role.priority >= UserRole.ADMIN.priority,
                     onBack = { currentTab = HomeTab.HOME },
                 )
@@ -111,6 +114,8 @@ fun HomeScreen(
                 )
                 HomeTab.WALLET -> WalletScreen(
                     uid = user.uid,
+                    userName = userName,
+                    userEmail = userEmail,
                     onBack = { currentTab = HomeTab.HOME },
                 )
             }
