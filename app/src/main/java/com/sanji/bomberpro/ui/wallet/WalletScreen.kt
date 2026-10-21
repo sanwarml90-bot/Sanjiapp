@@ -59,6 +59,7 @@ import com.sanji.bomberpro.services.SubscriptionPlan
 import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.payment.PaymentSubmitScreen
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -71,6 +72,8 @@ private fun fmtShort(ts: Long): String =
 @Composable
 fun WalletScreen(
     uid: String,
+    userName: String,
+    userEmail: String,
     onBack: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
@@ -93,7 +96,6 @@ fun WalletScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf<String?>(null) }
 
-    // Load initial
     LaunchedEffect(Unit) {
         settings = userData.getGlobalSettings()
         packs = pricing.loadCreditPacks()
@@ -103,7 +105,6 @@ fun WalletScreen(
         loading = false
     }
 
-    // Live doc
     LaunchedEffect(uid) {
         UserDocObserver.observeUserDoc(uid).collect { map ->
             credits = (map["credits"] as? Number)?.toInt() ?: 0
@@ -114,15 +115,38 @@ fun WalletScreen(
         }
     }
 
-    // Buy dialog screen
     val activeBuy = buyTarget
     if (activeBuy != null) {
-        BuyInstructionsModal(
-            target = activeBuy,
-            upiId = settings.upiId,
-            upiName = settings.upiName,
-            onClose = { buyTarget = null },
-        )
+        when (activeBuy) {
+            is BuyTarget.Credits -> PaymentSubmitScreen(
+                uid = uid,
+                userName = userName,
+                userEmail = userEmail,
+                type = "credits",
+                packId = activeBuy.pack.id,
+                packName = activeBuy.pack.name,
+                creditsAmount = activeBuy.pack.credits,
+                plan = "",
+                amountInr = activeBuy.pack.priceInr,
+                upiId = settings.upiId,
+                upiName = settings.upiName,
+                onClose = { buyTarget = null },
+            )
+            is BuyTarget.Subscription -> PaymentSubmitScreen(
+                uid = uid,
+                userName = userName,
+                userEmail = userEmail,
+                type = "subscription",
+                packId = activeBuy.plan.id,
+                packName = activeBuy.plan.name,
+                creditsAmount = 0,
+                plan = activeBuy.plan.id,
+                amountInr = activeBuy.plan.priceInr,
+                upiId = settings.upiId,
+                upiName = settings.upiName,
+                onClose = { buyTarget = null },
+            )
+        }
         return
     }
 
@@ -133,7 +157,6 @@ fun WalletScreen(
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
-        // Top bar
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
@@ -155,7 +178,6 @@ fun WalletScreen(
 
         Spacer(Modifier.height(12.dp))
 
-        // Hero balance card
         Surface(
             shape = RoundedCornerShape(24.dp),
             color = Color.Transparent,
@@ -164,40 +186,25 @@ fun WalletScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(colors.primary, colors.secondary)
-                        )
-                    )
+                    .background(Brush.linearGradient(colors = listOf(colors.primary, colors.secondary)))
                     .padding(20.dp),
             ) {
                 Column {
-                    Text(
-                        "Your balance",
-                        fontSize = 11.sp, color = Color.Black.copy(alpha = 0.7f),
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    Text("Your balance", fontSize = 11.sp, color = Color.Black.copy(alpha = 0.7f), fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "$credits",
-                            fontSize = 38.sp, fontWeight = FontWeight.Black,
+                            "$credits", fontSize = 38.sp, fontWeight = FontWeight.Black,
                             color = Color.Black, fontFamily = FontFamily.Monospace,
                         )
                         Spacer(Modifier.width(8.dp))
                         Column {
-                            Text(
-                                "credits",
-                                fontSize = 12.sp, color = Color.Black.copy(alpha = 0.7f),
-                            )
+                            Text("credits", fontSize = 12.sp, color = Color.Black.copy(alpha = 0.7f))
                             Spacer(Modifier.height(4.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("🪙", fontSize = 12.sp)
                                 Spacer(Modifier.width(4.dp))
-                                Text(
-                                    "$coins coins",
-                                    fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.SemiBold,
-                                )
+                                Text("$coins coins", fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -207,48 +214,25 @@ fun WalletScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        // Action row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            ActionButton(
-                icon = Icons.Default.ShoppingCart,
-                label = "Buy",
-                onClick = {
-                    if (packs.isNotEmpty()) {
-                        buyTarget = BuyTarget.Credits(packs.first())
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ActionButton(Icons.Default.ShoppingCart, "Buy", {
+                if (packs.isNotEmpty()) buyTarget = BuyTarget.Credits(packs.first())
+                else error = "No packs available"
+            }, Modifier.weight(1f))
+            ActionButton(Icons.Default.CheckCircle, "Redeem", { showRedeem = true }, Modifier.weight(1f))
+            ActionButton(Icons.Default.MonetizationOn, if (dailyBonusRemaining > 0) "Bonus\n${fmtDur(dailyBonusRemaining)}" else "Bonus", {
+                scope.launch {
+                    val amount = userData.tryClaimDailyBonus(uid)
+                    if (amount != null && amount > 0) {
+                        success = "+$amount credits claimed!"
+                        dailyBonusRemaining = userData.getDailyBonusRemaining(uid)
                     } else {
-                        error = "Packs not loaded"
+                        error = "Not ready — come back later"
                     }
-                },
-                modifier = Modifier.weight(1f),
-            )
-            ActionButton(
-                icon = Icons.Default.CheckCircle,
-                label = "Redeem",
-                onClick = { showRedeem = true },
-                modifier = Modifier.weight(1f),
-            )
-            ActionButton(
-                icon = Icons.Default.MonetizationOn,
-                label = if (dailyBonusRemaining > 0) "Bonus\n${fmtDur(dailyBonusRemaining)}" else "Bonus",
-                onClick = {
-                    scope.launch {
-                        val amount = userData.tryClaimDailyBonus(uid)
-                        if (amount != null && amount > 0) {
-                            success = "+$amount credits claimed!"
-                            dailyBonusRemaining = userData.getDailyBonusRemaining(uid)
-                        } else {
-                            error = "Not ready — come back later"
-                        }
-                    }
-                },
-                modifier = Modifier.weight(1f),
-            )
+                }
+            }, Modifier.weight(1f))
         }
 
-        // Subscription status
         if (subPlan != "free" && subExpiresAt > System.currentTimeMillis() / 1000L) {
             Spacer(Modifier.height(16.dp))
             Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
@@ -256,14 +240,8 @@ fun WalletScreen(
                     Icon(Icons.Default.WorkspacePremium, null, tint = colors.primary)
                     Spacer(Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "${subPlan.uppercase()} active",
-                            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
-                        )
-                        Text(
-                            "Expires: ${fmtShort(subExpiresAt)}",
-                            fontSize = 11.sp, color = colors.onSurfaceVariant,
-                        )
+                        Text("${subPlan.uppercase()} active", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                        Text("Expires: ${fmtShort(subExpiresAt)}", fontSize = 11.sp, color = colors.onSurfaceVariant)
                     }
                 }
             }
@@ -278,12 +256,8 @@ fun WalletScreen(
             return
         }
 
-        // Credit packs
         if (packs.isNotEmpty()) {
-            Text(
-                "Buy Credits",
-                fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
-            )
+            Text("Buy Credits", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
             Spacer(Modifier.height(8.dp))
             packs.forEach { pack ->
                 Surface(
@@ -299,22 +273,15 @@ fun WalletScreen(
                             Text(pack.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
                             Text("${pack.credits} credits", fontSize = 11.sp, color = colors.onSurfaceVariant)
                         }
-                        Text(
-                            "₹${pack.priceInr}",
-                            fontSize = 16.sp, fontWeight = FontWeight.Bold, color = colors.primary,
-                        )
+                        Text("₹${pack.priceInr}", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = colors.primary)
                     }
                 }
             }
             Spacer(Modifier.height(24.dp))
         }
 
-        // Subscription plans
         if (plans.isNotEmpty()) {
-            Text(
-                "Upgrade Subscription",
-                fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
-            )
+            Text("Upgrade Subscription", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
             Spacer(Modifier.height(8.dp))
             plans.forEach { plan ->
                 Surface(
@@ -328,27 +295,17 @@ fun WalletScreen(
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(plan.name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
-                            Text(
-                                "${plan.durationDays} days · ${plan.dailyLimit} SMS/day",
-                                fontSize = 11.sp, color = colors.onSurfaceVariant,
-                            )
+                            Text("${plan.durationDays} days · ${plan.dailyLimit} SMS/day", fontSize = 11.sp, color = colors.onSurfaceVariant)
                         }
-                        Text(
-                            "₹${plan.priceInr}",
-                            fontSize = 16.sp, fontWeight = FontWeight.Bold, color = colors.primary,
-                        )
+                        Text("₹${plan.priceInr}", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = colors.primary)
                     }
                 }
             }
             Spacer(Modifier.height(24.dp))
         }
 
-        // Recent tx
         if (txs.isNotEmpty()) {
-            Text(
-                "Recent Transactions",
-                fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
-            )
+            Text("Recent Transactions", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
             Spacer(Modifier.height(8.dp))
             txs.forEach { t ->
                 val isCoin = t.type.contains("coin", true)
@@ -382,7 +339,6 @@ fun WalletScreen(
         }
     }
 
-    // Redeem dialog
     if (showRedeem) {
         RedeemDialog(
             onDismiss = { showRedeem = false },
@@ -435,51 +391,75 @@ private fun ActionButton(
         ) {
             Icon(icon, null, tint = colors.primary, modifier = Modifier.size(22.dp))
             Spacer(Modifier.height(6.dp))
-            Text(
-                label, fontSize = 11.sp, color = colors.onBackground,
-                textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold,
-            )
+            Text(label, fontSize = 11.sp, color = colors.onBackground, textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
 @Composable
-private fun BuyInstructionsModal(
-    target: BuyTarget,
-    upiId: String,
-    upiName: String,
-    onClose: () -> Unit,
+private fun RedeemDialog(
+    onDismiss: () -> Unit,
+    onRedeem: (String) -> Unit,
 ) {
     val colors = LocalSanjiColors.current
-    val title = when (target) {
-        is BuyTarget.Credits -> target.pack.name
-        is BuyTarget.Subscription -> "${target.plan.name} subscription"
-    }
-    val amount = when (target) {
-        is BuyTarget.Credits -> target.pack.priceInr
-        is BuyTarget.Subscription -> target.plan.priceInr
-    }
+    var code by remember { mutableStateOf("") }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(colors.background)
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+    Box(
+        modifier = Modifier.fillMaxSize().background(colors.background.copy(alpha = 0.9f)),
+        contentAlignment = Alignment.Center,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, "Close", tint = colors.onBackground)
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = colors.surface,
+            modifier = Modifier.fillMaxWidth().padding(24.dp),
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Redeem Code", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = colors.onBackground, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, "Close", tint = colors.onSurfaceVariant)
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { code = it.uppercase() },
+                    label = { Text("Enter code") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = { if (code.isNotBlank()) onRedeem(code) },
+                    enabled = code.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
+                ) { Text("Redeem", fontWeight = FontWeight.Bold) }
             }
-            Spacer(Modifier.weight(1f))
         }
+    }
+}
 
-        Spacer(Modifier.height(12.dp))
-        Text(
-            "Payment Instructions",
-            fontSize = 20.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
-        )
-        Spacer(Modifier.height(20.dp))
+private fun humanType(type: String): String = when (type) {
+    "credit_add" -> "Credits added"
+    "credit_add_manual" -> "Credits (manual)"
+    "credit_deduct" -> "Credits deducted"
+    "blast-reserve" -> "Blast reserved"
+    "blast-refund" -> "Blast refund"
+    "coin_add" -> "Coins added"
+    "coin_add_manual" -> "Coins (manual)"
+    "coin_deduct" -> "Coins deducted"
+    "daily_bonus" -> "Daily bonus"
+    "referral_bonus" -> "Referral bonus"
+    "redeem_credit" -> "Redeem credit"
+    "redeem_coin" -> "Redeem coin"
+    else -> type.replace('_', ' ').replaceFirstChar { it.uppercase() }
+}
 
-        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
-    
+private fun fmtDur(seconds: Long): String {
+    if (seconds <= 0) return "ready"
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
