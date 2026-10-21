@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -79,14 +80,14 @@ fun SupportAdminScreen(
     var replyText by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
 
-    suspend fun refresh() {
+    suspend fun refreshInternal() {
         loading = true
         tickets = service.listOpenTickets()
         appeals = service.listAppeals(onlyOpen = true)
         loading = false
     }
 
-    LaunchedEffect(Unit) { refresh() }
+    LaunchedEffect(Unit) { refreshInternal() }
 
     when (view) {
         SupportAdminView.TICKETS -> Column(
@@ -101,7 +102,7 @@ fun SupportAdminScreen(
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                     color = colors.onBackground, modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = { scope.launch { refresh() } }) {
+                IconButton(onClick = { scope.launch { refreshInternal() } }) {
                     Icon(Icons.Default.Refresh, "Refresh", tint = colors.primary)
                 }
             }
@@ -202,7 +203,7 @@ fun SupportAdminScreen(
                                             onClick = {
                                                 scope.launch {
                                                     service.resolveAppeal(a.id)
-                                                    refresh()
+                                                    refreshInternal()
                                                 }
                                             },
                                             colors = ButtonDefaults.buttonColors(
@@ -227,12 +228,16 @@ fun SupportAdminScreen(
 
         SupportAdminView.DETAIL -> {
             val t = selectedTicket
-            if (t == null) view = SupportAdminView.TICKETS
-            else Column(
+            if (t == null) {
+                LaunchedEffect(Unit) { view = SupportAdminView.TICKETS }
+            } else Column(
                 modifier = Modifier.fillMaxSize().background(colors.background).padding(16.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { view = SupportAdminView.TICKETS; refresh() }) {
+                    IconButton(onClick = {
+                        view = SupportAdminView.TICKETS
+                        scope.launch { refreshInternal() }
+                    }) {
                         Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
                     }
                     Text(
@@ -244,7 +249,7 @@ fun SupportAdminScreen(
                         scope.launch {
                             service.closeTicket(t.id)
                             view = SupportAdminView.TICKETS
-                            refresh()
+                            refreshInternal()
                         }
                     }) {
                         Icon(Icons.Default.Close, "Close", tint = colors.error)
@@ -317,7 +322,9 @@ fun SupportAdminScreen(
             }
         }
 
-        SupportAdminView.APPEALS -> view = SupportAdminView.TICKETS
+        SupportAdminView.APPEALS -> {
+            LaunchedEffect(Unit) { view = SupportAdminView.TICKETS }
+        }
     }
 }
 
