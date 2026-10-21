@@ -11,13 +11,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -29,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,18 +38,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.sanji.bomberpro.data.UserProfile
+import com.sanji.bomberpro.data.AuthManager
+import com.sanji.bomberpro.data.AuthState
+import com.sanji.bomberpro.data.UserRole
 import com.sanji.bomberpro.services.BlastEvent
 import com.sanji.bomberpro.services.BlastExecutor
 import com.sanji.bomberpro.services.BlastSpeed
 import com.sanji.bomberpro.services.Device
 import com.sanji.bomberpro.services.RealtimeDbService
+import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -56,13 +60,28 @@ private enum class BlastStep { NUMBER, MESSAGE, SPEED, COUNT, PROGRESS, RESULT }
 
 @Composable
 fun SmsBlastScreen(
-    profile: UserProfile?,
+    authManager: AuthManager,
     onBack: () -> Unit,
 ) {
+    val authState by authManager.authState.collectAsState()
+    val logged = authState as? AuthState.LoggedIn
+
+    if (logged == null) {
+        onBack()
+        return
+    }
+
+    val uid = logged.user.uid
+    val userName = logged.profile?.displayName ?: (logged.user.displayName ?: "User")
+    val userEmail = logged.profile?.email ?: (logged.user.email ?: "")
+    val isAdmin = logged.role.priority >= UserRole.ADMIN.priority
+    val profile = logged.profile
+
     val colors = LocalSanjiColors.current
     val scope = rememberCoroutineScope()
 
     val rtdb = remember { RealtimeDbService() }
+    val userData = remember { UserDataService() }
     val executor = remember { BlastExecutor(rtdb) }
 
     var step by remember { mutableStateOf(BlastStep.NUMBER) }
@@ -76,9 +95,12 @@ fun SmsBlastScreen(
     var total by remember { mutableStateOf(0) }
     var rate by remember { mutableStateOf(0.0) }
     var duration by remember { mutableStateOf(0L) }
+    var refunded by remember { mutableStateOf(0) }
+    var finalBalance by remember { mutableStateOf(0) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var devices by remember { mutableStateOf<List<Device>>(emptyList()) }
     var scanning by remember { mutableStateOf(false) }
+    var reserved by remember { mutableStateOf(0) }
     var cancelFlag = remember { AtomicBoolean(false) }
 
     val credits = profile?.credits ?: 0
@@ -89,12 +111,11 @@ fun SmsBlastScreen(
             .background(colors.background)
             .padding(16.dp),
     ) {
-        // Top bar
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = {
                 if (step == BlastStep.PROGRESS) cancelFlag.set(true) else onBack()
             }) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = colors.onBackground)
+                Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
             }
             Spacer(Modifier.weight(1f))
             Text(
@@ -107,129 +128,158 @@ fun SmsBlastScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        when (step) {
-            BlastStep.NUMBER -> StepNumber(
-                number = number,
-                onChange = { number = it },
-                onNext = {
-                    val clean = number.replace(" ", "").replace("-", "").replace("+", "")
-                    if (clean.length < 7) {
-                        errorMsg = "Invalid number (min 7 digits)"
-                    } else {
-                        errorMsg = null
-                        step = BlastStep.MESSAGE
-                    }
-                },
-            )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            when (step) {
+                BlastStep.NUMBER -> StepNumber(
+                    number = number,
+                    onChange = { number = it },
+                    onNext = {
+                        val clean = number.replace(" ", "").replace("-", "").replace("+", "")
+                        if (clean.length < 7) {
+                            errorMsg = "Invalid number (min 7 digits)"
+                        } else {
+                            errorMsg = null
+                            step = BlastStep.MESSAGE
+                        }
+                    },
+                )
 
-            BlastStep.MESSAGE -> StepMessage(
-                message = message,
-                onChange = { message = it },
-                onNext = {
-                    if (message.isBlank()) errorMsg = "Message required"
-                    else { errorMsg = null; step = BlastStep.SPEED }
-                },
-                onBack = { step = BlastStep.NUMBER },
-            )
+                BlastStep.MESSAGE -> StepMessage(
+                    message = message,
+                    onChange = { message = it },
+                    onNext = {
+                        if (message.isBlank()) errorMsg = "Message required"
+                        else { errorMsg = null; step = BlastStep.SPEED }
+                    },
+                    onBack = { step = BlastStep.NUMBER },
+                )
 
-            BlastStep.SPEED -> StepSpeed(
-                selected = speed,
-                onSelect = { speed = it },
-                onNext = { step = BlastStep.COUNT },
-            )
+                BlastStep.SPEED -> StepSpeed(
+                    selected = speed,
+                    onSelect = { speed = it },
+                    onNext = { step = BlastStep.COUNT },
+                )
 
-            BlastStep.COUNT -> StepCount(
-                countText = countText,
-                onChange = { countText = it },
-                credits = credits,
-                devicesCount = devices.size,
-                scanning = scanning,
-                onScan = {
-                    scanning = true
-                    scope.launch {
-                        val firebases = rtdb.loadFirebases()
-                        devices = rtdb.scanAll(firebases)
-                        scanning = false
-                    }
-                },
-                onStart = {
-                    val cnt = countText.toIntOrNull() ?: 0
-                    if (cnt <= 0) { errorMsg = "Enter a valid count" }
-                    else if (devices.isEmpty()) { errorMsg = "Scan devices first" }
-                    else if (cnt > credits && credits > 0) {
-                        errorMsg = "Not enough credits (you have $credits)"
-                    } else {
-                        errorMsg = null
-                        cancelFlag = AtomicBoolean(false)
-                        sent = 0; failed = 0; total = cnt; rate = 0.0
-                        step = BlastStep.PROGRESS
-
+                BlastStep.COUNT -> StepCount(
+                    countText = countText,
+                    onChange = { countText = it },
+                    credits = credits,
+                    devicesCount = devices.size,
+                    scanning = scanning,
+                    onScan = {
+                        scanning = true
                         scope.launch {
-                            executor.execute(
-                                devices = devices,
-                                target = number,
-                                message = message,
-                                count = cnt,
-                                threads = 20,
-                                speed = speed,
-                                cancelFlag = cancelFlag,
-                            ).collect { event ->
-                                when (event) {
-                                    is BlastEvent.Started -> { total = event.total }
-                                    is BlastEvent.Progress -> {
-                                        sent = event.sent
-                                        failed = event.failed
-                                        rate = event.ratePerSec
-                                    }
-                                    is BlastEvent.Complete -> {
-                                        duration = event.durationSec
-                                        step = BlastStep.RESULT
-                                    }
-                                    is BlastEvent.Error -> {
-                                        errorMsg = event.message
-                                        step = BlastStep.RESULT
+                            val firebases = rtdb.loadFirebases()
+                            devices = rtdb.scanAll(firebases)
+                            scanning = false
+                        }
+                    },
+                    onStart = {
+                        val cnt = countText.toIntOrNull() ?: 0
+                        if (cnt <= 0) { errorMsg = "Enter a valid count" }
+                        else if (devices.isEmpty()) { errorMsg = "Scan devices first" }
+                        else if (!isAdmin && cnt > credits) {
+                            errorMsg = "Not enough credits (you have $credits)"
+                        } else {
+                            errorMsg = null
+                            cancelFlag = AtomicBoolean(false)
+                            sent = 0; failed = 0; total = cnt; rate = 0.0
+                            refunded = 0; finalBalance = 0; reserved = 0
+                            step = BlastStep.PROGRESS
+
+                            scope.launch {
+                                executor.execute(
+                                    uid = uid,
+                                    isAdmin = isAdmin,
+                                    userData = userData,
+                                    userName = userName,
+                                    userEmail = userEmail,
+                                    devices = devices,
+                                    target = number,
+                                    message = message,
+                                    count = cnt,
+                                    threads = 20,
+                                    speed = speed,
+                                    cancelFlag = cancelFlag,
+                                ).collect { event ->
+                                    when (event) {
+                                        is BlastEvent.Started -> {
+                                            total = event.total
+                                            reserved = event.reservedCredits
+                                        }
+                                        is BlastEvent.Progress -> {
+                                            sent = event.sent
+                                            failed = event.failed
+                                            rate = event.ratePerSec
+                                        }
+                                        is BlastEvent.Complete -> {
+                                            duration = event.durationSec
+                                            refunded = event.refundedCredits
+                                            finalBalance = event.finalBalance
+                                            step = BlastStep.RESULT
+                                        }
+                                        is BlastEvent.Error -> {
+                                            errorMsg = event.message
+                                            step = BlastStep.RESULT
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                },
-                onBack = { step = BlastStep.SPEED },
-            )
+                    },
+                    onBack = { step = BlastStep.SPEED },
+                    isAdmin = isAdmin,
+                )
 
-            BlastStep.PROGRESS -> StepProgress(
-                sent = sent,
-                failed = failed,
-                total = total,
-                rate = rate,
-                onStop = { cancelFlag.set(true) },
-            )
+                BlastStep.PROGRESS -> StepProgress(
+                    sent = sent,
+                    failed = failed,
+                    total = total,
+                    rate = rate,
+                    reserved = reserved,
+                    isAdmin = isAdmin,
+                    onStop = { cancelFlag.set(true) },
+                )
 
-            BlastStep.RESULT -> StepResult(
-                sent = sent,
-                failed = failed,
-                total = total,
-                duration = duration,
-                errorMsg = errorMsg,
-                onDone = onBack,
-            )
-        }
+                BlastStep.RESULT -> StepResult(
+                    sent = sent,
+                    failed = failed,
+                    total = total,
+                    duration = duration,
+                    refunded = refunded,
+                    finalBalance = finalBalance,
+                    isAdmin = isAdmin,
+                    errorMsg = errorMsg,
+                    onDone = onBack,
+                )
+            }
 
-        if (errorMsg != null && step != BlastStep.RESULT) {
-            Spacer(Modifier.height(12.dp))
-            Text(errorMsg!!, color = colors.error, fontSize = 13.sp)
+            if (errorMsg != null && step != BlastStep.RESULT) {
+                Spacer(Modifier.height(12.dp))
+                Text(errorMsg!!, color = colors.error, fontSize = 13.sp)
+            }
         }
     }
 }
 
+// ============================================================
+//  STEP 1 — Number
+// ============================================================
 @Composable
-private fun StepNumber(number: String, onChange: (String) -> Unit, onNext: () -> Unit) {
+private fun StepNumber(
+    number: String,
+    onChange: (String) -> Unit,
+    onNext: () -> Unit,
+) {
     val colors = LocalSanjiColors.current
     Text("Step 1 / 4 — Target Number", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
     Spacer(Modifier.height(8.dp))
     Text("Enter phone number (with country code)", fontSize = 12.sp, color = colors.onSurfaceVariant)
     Spacer(Modifier.height(24.dp))
-
     OutlinedTextField(
         value = number,
         onValueChange = onChange,
@@ -238,19 +288,25 @@ private fun StepNumber(number: String, onChange: (String) -> Unit, onNext: () ->
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
         modifier = Modifier.fillMaxWidth(),
     )
-
     Spacer(Modifier.height(24.dp))
-    PrimaryButton(label = "Next →", onClick = onNext, enabled = number.isNotBlank())
+    PrimaryButton("Next →", onNext, number.isNotBlank())
 }
 
+// ============================================================
+//  STEP 2 — Message
+// ============================================================
 @Composable
-private fun StepMessage(message: String, onChange: (String) -> Unit, onNext: () -> Unit, onBack: () -> Unit) {
+private fun StepMessage(
+    message: String,
+    onChange: (String) -> Unit,
+    onNext: () -> Unit,
+    onBack: () -> Unit,
+) {
     val colors = LocalSanjiColors.current
     Text("Step 2 / 4 — Message", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
     Spacer(Modifier.height(8.dp))
     Text("Custom message (max 1000 chars)", fontSize = 12.sp, color = colors.onSurfaceVariant)
     Spacer(Modifier.height(24.dp))
-
     OutlinedTextField(
         value = message,
         onValueChange = { if (it.length <= 1000) onChange(it) },
@@ -260,36 +316,36 @@ private fun StepMessage(message: String, onChange: (String) -> Unit, onNext: () 
         modifier = Modifier.fillMaxWidth(),
     )
     Text("${message.length} / 1000", fontSize = 11.sp, color = colors.onSurfaceVariant)
-
     Spacer(Modifier.height(24.dp))
-    PrimaryButton(label = "Next →", onClick = onNext, enabled = message.isNotBlank())
+    PrimaryButton("Next →", onNext, message.isNotBlank())
     Spacer(Modifier.height(8.dp))
     TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
         Text("← Back", color = colors.onSurfaceVariant)
     }
 }
 
+// ============================================================
+//  STEP 3 — Speed
+// ============================================================
 @Composable
-private fun StepSpeed(selected: BlastSpeed, onSelect: (BlastSpeed) -> Unit, onNext: () -> Unit) {
+private fun StepSpeed(
+    selected: BlastSpeed,
+    onSelect: (BlastSpeed) -> Unit,
+    onNext: () -> Unit,
+) {
     val colors = LocalSanjiColors.current
     Text("Step 3 / 4 — Speed", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
     Spacer(Modifier.height(8.dp))
     Text("How fast should messages go?", fontSize = 12.sp, color = colors.onSurfaceVariant)
     Spacer(Modifier.height(24.dp))
-
     BlastSpeed.entries.forEach { s ->
         Surface(
             onClick = { onSelect(s) },
             shape = RoundedCornerShape(14.dp),
             color = if (selected == s) colors.primary.copy(alpha = 0.15f) else colors.surface,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
         ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(s.label, fontWeight = FontWeight.Bold, color = colors.onBackground)
                     Text(
@@ -298,20 +354,22 @@ private fun StepSpeed(selected: BlastSpeed, onSelect: (BlastSpeed) -> Unit, onNe
                             BlastSpeed.MEDIUM -> "Balanced · 50ms delay"
                             BlastSpeed.SLOW -> "Safe · 200ms delay"
                         },
-                        fontSize = 11.sp, color = colors.onSurfaceVariant
+                        fontSize = 11.sp, color = colors.onSurfaceVariant,
                     )
                 }
                 if (selected == s) {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = colors.primary)
+                    Icon(Icons.Default.CheckCircle, null, tint = colors.primary)
                 }
             }
         }
     }
-
     Spacer(Modifier.height(24.dp))
-    PrimaryButton(label = "Next →", onClick = onNext, enabled = true)
+    PrimaryButton("Next →", onNext, true)
 }
 
+// ============================================================
+//  STEP 4 — Count
+// ============================================================
 @Composable
 private fun StepCount(
     countText: String,
@@ -322,16 +380,13 @@ private fun StepCount(
     onScan: () -> Unit,
     onStart: () -> Unit,
     onBack: () -> Unit,
+    isAdmin: Boolean,
 ) {
     val colors = LocalSanjiColors.current
     Text("Step 4 / 4 — Count", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
     Spacer(Modifier.height(8.dp))
 
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = colors.surface,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+    Surface(shape = RoundedCornerShape(12.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("Online devices", fontSize = 12.sp, color = colors.onSurfaceVariant)
@@ -347,8 +402,15 @@ private fun StepCount(
 
     Spacer(Modifier.height(12.dp))
 
-    Text("Credits available: ${credits}", fontSize = 12.sp, color = colors.onSurfaceVariant)
-    Spacer(Modifier.height(12.dp))
+    if (!isAdmin) {
+        Text("Credits available: $credits", fontSize = 12.sp, color = colors.onSurfaceVariant)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Failed sends are refunded automatically.",
+            fontSize = 11.sp, color = colors.primary,
+        )
+        Spacer(Modifier.height(12.dp))
+    }
 
     OutlinedTextField(
         value = countText,
@@ -360,15 +422,26 @@ private fun StepCount(
     )
 
     Spacer(Modifier.height(24.dp))
-    PrimaryButton(label = "START BLAST 🚀", onClick = onStart, enabled = countText.isNotBlank())
+    PrimaryButton("START BLAST 🚀", onStart, countText.isNotBlank())
     Spacer(Modifier.height(8.dp))
     TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
         Text("← Back", color = colors.onSurfaceVariant)
     }
 }
 
+// ============================================================
+//  PROGRESS
+// ============================================================
 @Composable
-private fun StepProgress(sent: Int, failed: Int, total: Int, rate: Double, onStop: () -> Unit) {
+private fun StepProgress(
+    sent: Int,
+    failed: Int,
+    total: Int,
+    rate: Double,
+    reserved: Int,
+    isAdmin: Boolean,
+    onStop: () -> Unit,
+) {
     val colors = LocalSanjiColors.current
     val progress = if (total > 0) (sent + failed).toFloat() / total else 0f
 
@@ -383,9 +456,7 @@ private fun StepProgress(sent: Int, failed: Int, total: Int, rate: Double, onSto
             progress = { progress },
             color = colors.primary,
             trackColor = colors.surface,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(10.dp),
+            modifier = Modifier.fillMaxWidth().height(10.dp),
         )
         Spacer(Modifier.height(8.dp))
         Text("${(progress * 100).toInt()}%", fontSize = 12.sp, color = colors.onSurfaceVariant)
@@ -401,8 +472,16 @@ private fun StepProgress(sent: Int, failed: Int, total: Int, rate: Double, onSto
         Spacer(Modifier.height(16.dp))
         Text(
             text = "⚡ ${"%.1f".format(rate)} / sec",
-            fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.primary
+            fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.primary,
         )
+
+        if (!isAdmin) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Reserved: $reserved credits · Failed sends will refund",
+                fontSize = 11.sp, color = colors.onSurfaceVariant,
+            )
+        }
 
         Spacer(Modifier.height(32.dp))
         Button(
@@ -414,8 +493,21 @@ private fun StepProgress(sent: Int, failed: Int, total: Int, rate: Double, onSto
     }
 }
 
+// ============================================================
+//  RESULT
+// ============================================================
 @Composable
-private fun StepResult(sent: Int, failed: Int, total: Int, duration: Long, errorMsg: String?, onDone: () -> Unit) {
+private fun StepResult(
+    sent: Int,
+    failed: Int,
+    total: Int,
+    duration: Long,
+    refunded: Int,
+    finalBalance: Int,
+    isAdmin: Boolean,
+    errorMsg: String?,
+    onDone: () -> Unit,
+) {
     val colors = LocalSanjiColors.current
     val success = errorMsg == null && failed == 0
 
@@ -435,42 +527,18 @@ private fun StepResult(sent: Int, failed: Int, total: Int, duration: Long, error
             Spacer(Modifier.height(8.dp))
             Text(errorMsg, fontSize = 13.sp, color = colors.error)
         }
+
         Spacer(Modifier.height(24.dp))
+
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             StatBlock("SENT", "$sent", colors.success)
             StatBlock("FAILED", "$failed", colors.error)
             StatBlock("TIME", "${duration}s", colors.primary)
         }
-        Spacer(Modifier.height(32.dp))
-        PrimaryButton(label = "Done", onClick = onDone, enabled = true)
-    }
-}
 
-@Composable
-private fun StatBlock(label: String, value: String, color: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, fontSize = 24.sp, fontWeight = FontWeight.Black, color = color)
-        Text(label, fontSize = 11.sp, color = LocalSanjiColors.current.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun PrimaryButton(label: String, onClick: () -> Unit, enabled: Boolean) {
-    val colors = LocalSanjiColors.current
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(56.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = colors.primary,
-            contentColor = Color.Black,
-            disabledContainerColor = colors.surface,
-            disabledContentColor = colors.onSurfaceVariant,
-        ),
-    ) {
-        Text(label, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-    }
-}
+        if (!isAdmin) {
+            Spacer(Modifier.height(20.dp))
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = colors.surface,
+                modifier = Modifier.fillMax
