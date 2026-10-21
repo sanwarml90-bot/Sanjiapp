@@ -49,7 +49,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.network.Uri as NetUri
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -67,7 +66,7 @@ fun PaymentSubmitScreen(
     uid: String,
     userName: String,
     userEmail: String,
-    type: String,               // "credits" | "subscription"
+    type: String,
     packId: String,
     packName: String,
     creditsAmount: Int,
@@ -98,7 +97,6 @@ fun PaymentSubmitScreen(
         "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${Uri.encode(upiUri)}"
     else ""
 
-    // Listen for status changes after submit
     val activeRequest = submittedRequest
     if (activeRequest != null) {
         var liveStatus by remember(activeRequest.id) { mutableStateOf(activeRequest.status) }
@@ -136,7 +134,6 @@ fun PaymentSubmitScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        // Item + amount card
         Surface(
             shape = RoundedCornerShape(20.dp),
             color = Color.Transparent,
@@ -160,17 +157,13 @@ fun PaymentSubmitScreen(
                         fontSize = 20.sp, fontWeight = FontWeight.Black, color = Color.Black,
                     )
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        "₹$amountInr",
-                        fontSize = 32.sp, fontWeight = FontWeight.Black, color = Color.Black,
-                    )
+                    Text("₹$amountInr", fontSize = 32.sp, fontWeight = FontWeight.Black, color = Color.Black)
                 }
             }
         }
 
         Spacer(Modifier.height(20.dp))
 
-        // Step 1 — UPI info
         Text("1. Pay via UPI", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
         Spacer(Modifier.height(8.dp))
 
@@ -231,9 +224,7 @@ fun PaymentSubmitScreen(
                         AsyncImage(
                             model = qrUrl,
                             contentDescription = "QR",
-                            modifier = Modifier
-                                .padding(10.dp)
-                                .size(200.dp),
+                            modifier = Modifier.padding(10.dp).size(200.dp),
                         )
                     }
                 }
@@ -242,7 +233,6 @@ fun PaymentSubmitScreen(
 
         Spacer(Modifier.height(24.dp))
 
-        // Step 2 — Form
         Text("2. Submit confirmation", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
         Spacer(Modifier.height(8.dp))
 
@@ -265,7 +255,6 @@ fun PaymentSubmitScreen(
 
         Spacer(Modifier.height(14.dp))
 
-        // Screenshot picker
         Surface(
             onClick = { imagePicker.launch("image/*") },
             shape = RoundedCornerShape(14.dp),
@@ -396,10 +385,7 @@ private fun StatusScreen(
                 Spacer(Modifier.height(16.dp))
                 Text("Payment Rejected", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = colors.error)
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    "Contact support if this seems wrong",
-                    fontSize = 13.sp, color = colors.onSurfaceVariant,
-                )
+                Text("Contact support if this seems wrong", fontSize = 13.sp, color = colors.onSurfaceVariant)
                 Spacer(Modifier.height(28.dp))
                 Button(
                     onClick = onClose,
@@ -411,10 +397,7 @@ private fun StatusScreen(
             else -> {
                 CircularProgressIndicator(color = colors.primary, modifier = Modifier.size(60.dp))
                 Spacer(Modifier.height(24.dp))
-                Text(
-                    "Awaiting Approval",
-                    fontSize = 20.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
-                )
+                Text("Awaiting Approval", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "Admin will review and approve shortly.\nThis screen will update automatically.",
