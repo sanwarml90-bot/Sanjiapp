@@ -1,7 +1,6 @@
 package com.sanji.bomberpro.ui.appeal
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,7 +27,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,12 +38,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.sanji.bomberpro.services.Appeal
+import com.sanji.bomberpro.services.AppealRecord
 import com.sanji.bomberpro.services.AppealService
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -67,7 +65,7 @@ fun AppealScreen(
     val scope = rememberCoroutineScope()
     val service = remember { AppealService() }
 
-    var appeals by remember { mutableStateOf<List<Appeal>>(emptyList()) }
+    var appeals by remember { mutableStateOf<List<AppealRecord>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var text by remember { mutableStateOf("") }
     var submitting by remember { mutableStateOf(false) }
@@ -87,13 +85,13 @@ fun AppealScreen(
 
     LaunchedEffect(error) {
         if (error != null) {
-            kotlinx.coroutines.delay(4000)
+            delay(4000)
             error = null
         }
     }
     LaunchedEffect(success) {
         if (success != null) {
-            kotlinx.coroutines.delay(4000)
+            delay(4000)
             success = null
         }
     }
@@ -142,7 +140,6 @@ fun AppealScreen(
                     CircularProgressIndicator(color = colors.primary)
                 }
             } else {
-                // previous appeals
                 if (appeals.isNotEmpty()) {
                     Text("Your appeals", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
                     Spacer(Modifier.height(8.dp))
