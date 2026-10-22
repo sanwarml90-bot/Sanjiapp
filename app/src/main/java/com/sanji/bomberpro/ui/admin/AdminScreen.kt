@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -527,7 +528,11 @@ private fun VersionControlScreen(
                     }
                     if (s.lockedAt > 0) {
                         Spacer(Modifier.height(8.dp))
-                        Text("Locked at: ${java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault()).format(java.util.Date(s.lockedAt * 1000L))}", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                        Text(
+                            "Locked at: " + java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
+                                .format(java.util.Date(s.lockedAt * 1000L)),
+                            fontSize = 11.sp, color = colors.onSurfaceVariant,
+                        )
                     }
                 }
             }
