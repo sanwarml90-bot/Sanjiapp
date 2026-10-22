@@ -19,8 +19,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -53,6 +54,8 @@ import com.sanji.bomberpro.data.AuthState
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import kotlinx.coroutines.launch
 
+private enum class AuthMode { SIGN_IN, SIGN_UP }
+
 @Composable
 fun LoginScreen(
     authManager: AuthManager,
@@ -64,6 +67,8 @@ fun LoginScreen(
 
     val authState by authManager.authState.collectAsState()
 
+    var mode by remember { mutableStateOf(AuthMode.SIGN_IN) }
+    var username by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
@@ -103,145 +108,170 @@ fun LoginScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 32.dp),
+                .padding(horizontal = 24.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(40.dp))
+            Spacer(Modifier.height(24.dp))
 
             Text(
                 text = "SANJI BOMBER",
-                fontSize = 32.sp,
+                fontSize = 30.sp,
                 fontWeight = FontWeight.Black,
                 color = colors.onBackground,
                 textAlign = TextAlign.Center,
             )
             Text(
                 text = "PRO",
-                fontSize = 18.sp,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 10.sp,
                 color = colors.primary,
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(8.dp))
 
             Text(
                 text = "Fast. Private. Unlimited.",
-                fontSize = 13.sp,
+                fontSize = 12.sp,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
 
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(24.dp))
 
-            // ============================================================
-            //  GOOGLE SIGN IN
-            // ============================================================
-            Button(
-                onClick = {
-                    loading = true
-                    error = null
-                    info = null
-                    scope.launch {
-                        try {
-                            val credentialManager = CredentialManager.create(context)
-
-                            val googleIdOption = GetGoogleIdOption.Builder()
-                                .setFilterByAuthorizedAccounts(false)
-                                .setServerClientId(FirebaseConfig.WEB_CLIENT_ID)
-                                .setAutoSelectEnabled(false)
-                                .build()
-
-                            val request = GetCredentialRequest.Builder()
-                                .addCredentialOption(googleIdOption)
-                                .build()
-
-                            val result = credentialManager.getCredential(
-                                context = context,
-                                request = request,
-                            )
-
-                            val credential = result.credential
-                            if (credential is CustomCredential &&
-                                credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-                            ) {
-                                val googleCred =
-                                    GoogleIdTokenCredential.createFrom(credential.data)
-                                val idToken = googleCred.idToken
-
-                                val signInResult = authManager.signInWithGoogleIdToken(idToken)
-                                if (signInResult.isFailure) {
-                                    error = signInResult.exceptionOrNull()?.message
-                                        ?: "Google sign-in failed"
-                                    loading = false
-                                }
-                            } else {
-                                error = "Unexpected credential type"
-                                loading = false
-                            }
-                        } catch (e: GetCredentialException) {
-                            error = "Google sign-in setup incomplete. Email/password use karo."
-                            loading = false
-                        } catch (e: Exception) {
-                            error = e.message ?: "Google sign-in failed"
-                            loading = false
-                        }
-                    }
-                },
+            // Mode toggle
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White,
-                    contentColor = Color.Black,
-                ),
-                enabled = !loading,
+                    .background(colors.surface, RoundedCornerShape(14.dp))
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                if (loading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
-                        strokeWidth = 2.dp,
-                        color = Color.Black,
+                ModeTab(
+                    label = "Sign In",
+                    selected = mode == AuthMode.SIGN_IN,
+                    onClick = { mode = AuthMode.SIGN_IN; error = null; info = null },
+                    modifier = Modifier.weight(1f),
+                )
+                ModeTab(
+                    label = "Sign Up",
+                    selected = mode == AuthMode.SIGN_UP,
+                    onClick = { mode = AuthMode.SIGN_UP; error = null; info = null },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // Google button — Sign In only
+            if (mode == AuthMode.SIGN_IN) {
+                Button(
+                    onClick = {
+                        loading = true
+                        error = null
+                        info = null
+                        scope.launch {
+                            try {
+                                val credentialManager = CredentialManager.create(context)
+                                val googleIdOption = GetGoogleIdOption.Builder()
+                                    .setFilterByAuthorizedAccounts(false)
+                                    .setServerClientId(FirebaseConfig.WEB_CLIENT_ID)
+                                    .setAutoSelectEnabled(false)
+                                    .build()
+                                val request = GetCredentialRequest.Builder()
+                                    .addCredentialOption(googleIdOption)
+                                    .build()
+                                val result = credentialManager.getCredential(
+                                    context = context,
+                                    request = request,
+                                )
+                                val credential = result.credential
+                                if (credential is CustomCredential &&
+                                    credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+                                ) {
+                                    val googleCred =
+                                        GoogleIdTokenCredential.createFrom(credential.data)
+                                    val signInResult = authManager.signInWithGoogleIdToken(googleCred.idToken)
+                                    if (signInResult.isFailure) {
+                                        error = signInResult.exceptionOrNull()?.message
+                                            ?: "Google sign-in failed"
+                                        loading = false
+                                    }
+                                } else {
+                                    error = "Unexpected credential type"
+                                    loading = false
+                                }
+                            } catch (e: GetCredentialException) {
+                                error = "Google Sign-In unavailable — use email"
+                                loading = false
+                            } catch (e: Exception) {
+                                error = e.message ?: "Google sign-in failed"
+                                loading = false
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.White,
+                        contentColor = Color.Black,
+                    ),
+                    enabled = !loading,
+                ) {
+                    if (loading && mode == AuthMode.SIGN_IN) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.Black,
+                        )
+                    } else {
+                        Text(
+                            "Continue with Google",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    HorizontalDivider(
+                        modifier = Modifier.weight(1f),
+                        color = colors.onSurfaceVariant.copy(alpha = 0.3f),
                     )
-                } else {
                     Text(
-                        text = "Continue with Google",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        "  OR  ",
+                        fontSize = 12.sp,
+                        color = colors.onSurfaceVariant,
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.weight(1f),
+                        color = colors.onSurfaceVariant.copy(alpha = 0.3f),
                     )
                 }
+
+                Spacer(Modifier.height(16.dp))
             }
 
-            Spacer(Modifier.height(20.dp))
-
-            // ============================================================
-            //  DIVIDER
-            // ============================================================
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Divider(
-                    modifier = Modifier.weight(1f),
-                    color = colors.onSurfaceVariant.copy(alpha = 0.3f),
+            // Username field — sign up only
+            if (mode == AuthMode.SIGN_UP) {
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it.trim().take(32) },
+                    label = { Text("Username") },
+                    placeholder = { Text("letters, numbers, _") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !loading,
                 )
-                Text(
-                    text = "  OR  ",
-                    fontSize = 12.sp,
-                    color = colors.onSurfaceVariant,
-                )
-                Divider(
-                    modifier = Modifier.weight(1f),
-                    color = colors.onSurfaceVariant.copy(alpha = 0.3f),
-                )
+                Spacer(Modifier.height(10.dp))
             }
 
-            Spacer(Modifier.height(20.dp))
-
-            // ============================================================
-            //  EMAIL + PASSWORD
-            // ============================================================
+            // Email
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it.trim() },
@@ -252,12 +282,13 @@ fun LoginScreen(
                 enabled = !loading,
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
 
+            // Password
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("Password") },
+                label = { Text(if (mode == AuthMode.SIGN_UP) "Password (min 6)" else "Password") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -267,93 +298,142 @@ fun LoginScreen(
 
             Spacer(Modifier.height(16.dp))
 
+            // Submit
             Button(
                 onClick = {
                     error = null
                     info = null
                     if (email.isBlank() || !email.contains("@")) {
-                        error = "Valid email enter kar"
+                        error = "Valid email required"
                         return@Button
                     }
                     if (password.length < 6) {
                         error = "Password min 6 characters"
                         return@Button
                     }
+                    if (mode == AuthMode.SIGN_UP) {
+                        if (username.isBlank()) {
+                            error = "Username required"
+                            return@Button
+                        }
+                        if (username.length < 3) {
+                            error = "Username min 3 chars"
+                            return@Button
+                        }
+                        if (!username.matches(Regex("^[a-zA-Z0-9_]+$"))) {
+                            error = "Username: letters, numbers, _ only"
+                            return@Button
+                        }
+                    }
+
                     loading = true
                     scope.launch {
-                        val result = authManager.signInOrSignUpWithEmail(email, password)
+                        val result = if (mode == AuthMode.SIGN_IN) {
+                            authManager.signInWithEmail(email, password)
+                        } else {
+                            authManager.signUpWithEmail(email, password, username)
+                        }
                         if (result.isFailure) {
-                            error = result.exceptionOrNull()?.message ?: "Login failed"
+                            error = result.exceptionOrNull()?.message ?: "Failed"
                         }
                         loading = false
                     }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = colors.primary,
                     contentColor = Color.Black,
                 ),
                 enabled = !loading,
             ) {
-                if (loading) {
+                if (loading && mode != AuthMode.SIGN_IN) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier.size(20.dp),
                         strokeWidth = 2.dp,
                         color = Color.Black,
                     )
                 } else {
                     Text(
-                        text = "Sign In / Sign Up",
-                        fontSize = 16.sp,
+                        text = if (mode == AuthMode.SIGN_IN) "Sign In" else "Create Account",
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
 
             Text(
-                text = "Naya account? Wahi email + password daal — auto register ho jaayega.",
+                text = if (mode == AuthMode.SIGN_IN)
+                    "New here? Tap Sign Up above."
+                else
+                    "Already have an account? Tap Sign In above.",
                 fontSize = 11.sp,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
 
             if (error != null) {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(14.dp))
                 Text(
                     text = error!!,
                     color = colors.error,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
 
             if (info != null) {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(14.dp))
                 Text(
                     text = info!!,
                     color = colors.primary,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
 
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(24.dp))
 
             Text(
-                text = "By continuing, you agree to our Terms & Privacy Policy",
-                fontSize = 11.sp,
+                text = "By continuing, you agree to the Terms shown after login.",
+                fontSize = 10.sp,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
 
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun ModeTab(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalSanjiColors.current
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) colors.primary else Color.Transparent,
+        modifier = modifier,
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.padding(vertical = 10.dp),
+        ) {
+            Text(
+                text = label,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (selected) Color.Black else colors.onBackground,
+            )
         }
     }
 }
