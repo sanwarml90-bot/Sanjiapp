@@ -1,6 +1,7 @@
 package com.sanji.bomberpro.ui.admin
 
 import android.content.ContentValues
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -18,8 +19,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -27,19 +31,28 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -50,14 +63,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.services.FirebaseImportService
-import com.sanji.bomberpro.services.ImportResult
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+
+private enum class BulkTab { FILE, PASTE, EXPORT }
+private enum class BulkPhase { IDLE, EXTRACTING, PREVIEW, VALIDATING, INSERTING, RESULT }
 
 @Composable
 fun FirebaseBulkAddScreen(
@@ -70,392 +87,438 @@ fun FirebaseBulkAddScreen(
     val context = LocalContext.current
     val service = remember { FirebaseImportService() }
 
-    var showPasteDialog by remember { mutableStateOf(false) }
-    var pasteText by remember { mutableStateOf("") }
+    var tab by remember { mutableStateOf(BulkTab.FILE) }
+    var phase by remember { mutableStateOf(BulkPhase.IDLE) }
 
-    var processing by remember { mutableStateOf(false) }
-    var phase by remember { mutableStateOf("") }
-    var progressCurrent by remember { mutableStateOf(0) }
-    var progressTotal by remember { mutableStateOf(0) }
-    var progressAdded by remember { mutableStateOf(0) }
-    var result by remember { mutableStateOf<ImportResult?>(null) }
+    // extracted URLs + per-url selected state
+    val extracted = remember { mutableStateListOf<String>() }
+    val selected = remember { mutableStateListOf<Boolean>() }
+
+    var pasteText by remember { mutableStateOf("") }
+    var showPasteDialog by remember { mutableStateOf(false) }
+
+    // advanced
+    var advancedOpen by remember { mutableStateOf(false) }
+    var useCustomRegex by remember { mutableStateOf(false) }
+    var customRegex by remember { mutableStateOf("") }
+    var excludeExisting by remember { mutableStateOf(true) }
+
+    // progress
+    var valCurrent by remember { mutableStateOf(0) }
+    var valTotal by remember { mutableStateOf(0) }
+    var valValid by remember { mutableStateOf(0) }
+    var valFailed by remember { mutableStateOf(0) }
+    var phaseLabel by remember { mutableStateOf("") }
+
+    // results
+    var addedCount by remember { mutableStateOf(0) }
+    var skippedExisting by remember { mutableStateOf(0) }
+    var failureList by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var showFailureDetails by remember { mutableStateOf(false) }
+    var cancelled by remember { mutableStateOf(false) }
+
+    // export status
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    suspend fun runImport(block: suspend () -> Result<ImportResult>) {
-        processing = true
-        phase = "starting"
-        progressCurrent = 0
-        progressTotal = 0
-        progressAdded = 0
-        error = null
-        result = null
-        exportStatus = null
-        try {
-            val res = block()
-            if (res.isSuccess) {
-                result = res.getOrNull()
-                onCompleted()
-            } else {
-                error = res.exceptionOrNull()?.message ?: "Import failed"
-            }
-        } catch (e: Exception) {
-            error = e.message ?: "Import failed"
-        } finally {
-            processing = false
+    val cancelFlag = remember { AtomicBoolean(false) }
+
+    // file picker — multi-file, safer than GetContent
+    val multiFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
+        scope.launch {
+            runExtractFromUris(uris.map { it.toString() })
         }
     }
 
-    val filePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                runImport {
-                    service.importFromUri(
-                        adminUid = adminUid,
-                        uri = uri,
-                        contentResolver = context.contentResolver,
-                        onProgress = { p, c, t, a ->
-                            phase = p
-                            progressCurrent = c
-                            progressTotal = t
-                            progressAdded = a
-                        }
-                    )
+    suspend fun runExtractFromUris(uriStrings: List<String>) {
+        phase = BulkPhase.EXTRACTING
+        error = null
+        extracted.clear()
+        selected.clear()
+        try {
+            val pattern = if (useCustomRegex && customRegex.isNotBlank()) customRegex else null
+            val allUrls = mutableListOf<String>()
+            for (s in uriStrings) {
+                val read = service.readUriText(Uri.parse(s), context.contentResolver)
+                if (read.isFailure) {
+                    error = "Read failed for one file: ${read.exceptionOrNull()?.message}"
+                    continue
+                }
+                val urls = service.extractUrls(read.getOrNull() ?: "", pattern)
+                allUrls.addAll(urls)
+            }
+            val unique = allUrls.toSet().toList()
+            if (unique.isEmpty()) {
+                error = "No URLs found in selected file(s)"
+                phase = BulkPhase.IDLE
+                return
+            }
+            extracted.addAll(unique)
+            selected.addAll(unique.map { true })
+            phase = BulkPhase.PREVIEW
+        } catch (e: Exception) {
+            error = "Extract failed: ${e.message}"
+            phase = BulkPhase.IDLE
+        }
+    }
+
+    fun runExtractFromText(text: String) {
+        scope.launch {
+            phase = BulkPhase.EXTRACTING
+            error = null
+            extracted.clear()
+            selected.clear()
+            try {
+                val pattern = if (useCustomRegex && customRegex.isNotBlank()) customRegex else null
+                val urls = service.extractUrls(text, pattern)
+                if (urls.isEmpty()) {
+                    error = "No URLs found in pasted text"
+                    phase = BulkPhase.IDLE
+                    return@launch
+                }
+                extracted.addAll(urls)
+                selected.addAll(urls.map { true })
+                phase = BulkPhase.PREVIEW
+            } catch (e: Exception) {
+                error = "Extract failed: ${e.message}"
+                phase = BulkPhase.IDLE
+            }
+        }
+    }
+
+    fun runValidateAndInsert() {
+        val urls = extracted.filterIndexed { i, _ -> selected.getOrElse(i) { false } }
+        if (urls.isEmpty()) {
+            error = "Select at least one URL"
+            return
+        }
+        cancelFlag.set(false)
+        phase = BulkPhase.VALIDATING
+        valCurrent = 0
+        valTotal = 0
+        valValid = 0
+        valFailed = 0
+        phaseLabel = "Loading existing…"
+
+        scope.launch {
+            try {
+                val existing = if (excludeExisting) service.loadExistingUrls() else emptySet()
+                val already = urls.count { it.trimEnd('/') in existing }
+                skippedExisting = already
+                val toCheck = urls.filter { it.trimEnd('/') !in existing }
+
+                if (toCheck.isEmpty()) {
+                    addedCount = 0
+                    failureList = emptyList()
+                    phase = BulkPhase.RESULT
+                    return@launch
+                }
+
+                phaseLabel = "Validating…"
+                val validation = service.validateUrls(
+                    urls = toCheck,
+                    existingUrls = existing,
+                    cancel = cancelFlag,
+                    onProgress = { c, t, v, f ->
+                        valCurrent = c
+                        valTotal = t
+                        valValid = v
+                        valFailed = f
+                    }
+                )
+
+                if (validation.cancelled) {
+                    cancelled = true
+                    addedCount = 0
+                    failureList = validation.failed
+                    phase = BulkPhase.RESULT
+                    return@launch
+                }
+
+                phaseLabel = "Inserting…"
+                phase = BulkPhase.INSERTING
+                val insertRes = service.insertValidated(adminUid, validation.valid)
+                if (insertRes.isFailure) {
+                    error = insertRes.exceptionOrNull()?.message ?: "Insert failed"
+                    phase = BulkPhase.IDLE
+                    return@launch
+                }
+                addedCount = insertRes.getOrNull() ?: 0
+                failureList = validation.failed
+                phase = BulkPhase.RESULT
+                onCompleted()
+            } catch (e: Exception) {
+                error = "Validation failed: ${e.message}"
+                phase = BulkPhase.IDLE
+            }
+        }
+    }
+
+    fun saveToDownloads(content: String, filename: String, mime: String) {
+        scope.launch {
+            exportStatus = null
+            error = null
+            try {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    }
+                }
+                val uri = context.contentResolver.insert(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                ) ?: throw Exception("MediaStore insert failed")
+                context.contentResolver.openOutputStream(uri)?.use {
+                    it.write(content.toByteArray())
+                }
+                exportStatus = "Saved to Downloads/$filename"
+            } catch (e: Exception) {
+                try {
+                    val file = File(context.filesDir, filename)
+                    file.writeText(content)
+                    exportStatus = "Saved to app storage/$filename"
+                } catch (_: Exception) {
+                    error = "Export failed: ${e.message}"
                 }
             }
         }
     }
 
-    Box(
-        modifier = Modifier.fillMaxSize().background(colors.background),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-        ) {
+    Box(modifier = Modifier.fillMaxSize().background(colors.background)) {
+        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            // top bar
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = {
-                    if (!processing) onBack()
+                    if (phase == BulkPhase.VALIDATING || phase == BulkPhase.INSERTING) {
+                        cancelFlag.set(true)
+                    } else if (phase == BulkPhase.PREVIEW || phase == BulkPhase.RESULT) {
+                        extracted.clear()
+                        selected.clear()
+                        phase = BulkPhase.IDLE
+                        failureList = emptyList()
+                        addedCount = 0
+                        skippedExisting = 0
+                        cancelled = false
+                        error = null
+                    } else {
+                        onBack()
+                    }
                 }) {
                     Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
                 }
                 Text(
-                    "Bulk Add Firebases",
+                    "Bulk Firebases",
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                     color = colors.onBackground, modifier = Modifier.weight(1f),
                 )
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(8.dp))
 
-            Column(
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-            ) {
-                Text(
-                    "Import firebases from a file or paste URLs in bulk.",
-                    fontSize = 12.sp,
-                    color = colors.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "Supports .txt, .json, .csv, .html, .log — any text containing URLs",
-                    fontSize = 11.sp,
-                    color = colors.onSurfaceVariant,
-                )
+            // tabs
+            if (phase == BulkPhase.IDLE) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TabChip("File", tab == BulkTab.FILE) { tab = BulkTab.FILE }
+                    TabChip("Paste", tab == BulkTab.PASTE) { tab = BulkTab.PASTE }
+                    TabChip("Export", tab == BulkTab.EXPORT) { tab = BulkTab.EXPORT }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
 
-                Spacer(Modifier.height(16.dp))
-
-                if (!processing && result == null) {
-                    Surface(
-                        onClick = { filePicker.launch("*/*") },
-                        shape = RoundedCornerShape(14.dp),
-                        color = colors.surface,
-                        modifier = Modifier.fillMaxWidth(),
+            // content per phase
+            when (phase) {
+                BulkPhase.IDLE -> {
+                    Column(
+                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
                     ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                Icons.Default.UploadFile, null,
-                                tint = colors.primary,
-                                modifier = Modifier.size(28.dp),
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "Upload File",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colors.onBackground,
-                                )
-                                Text(
-                                    "Pick any text file containing URLs",
-                                    fontSize = 11.sp,
-                                    color = colors.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(10.dp))
-
-                    Surface(
-                        onClick = { showPasteDialog = true },
-                        shape = RoundedCornerShape(14.dp),
-                        color = colors.surface,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                Icons.Default.ContentPaste, null,
-                                tint = colors.primary,
-                                modifier = Modifier.size(28.dp),
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "Paste URLs",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colors.onBackground,
-                                )
-                                Text(
-                                    "Paste bulk text with URLs",
-                                    fontSize = 11.sp,
-                                    color = colors.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(10.dp))
-
-                    Surface(
-                        onClick = {
-                            scope.launch {
-                                exportStatus = null
-                                error = null
-                                val res = service.exportFirebases()
-                                if (res.isSuccess) {
-                                    val json = res.getOrNull() ?: ""
-                                    val filename = "firebases_export_${System.currentTimeMillis()}.json"
+                        when (tab) {
+                            BulkTab.FILE -> FileTab(
+                                onPick = {
                                     try {
-                                        val values = ContentValues().apply {
-                                            put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                                            put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                                put(
-                                                    MediaStore.MediaColumns.RELATIVE_PATH,
-                                                    Environment.DIRECTORY_DOWNLOADS,
-                                                )
-                                            }
-                                        }
-                                        val uri = context.contentResolver.insert(
-                                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
-                                        ) ?: throw Exception("MediaStore insert failed")
-                                        context.contentResolver.openOutputStream(uri)?.use {
-                                            it.write(json.toByteArray())
-                                        }
-                                        exportStatus = "Saved to Downloads/$filename"
+                                        multiFilePicker.launch(arrayOf("*/*"))
                                     } catch (e: Exception) {
-                                        try {
-                                            val file = File(context.filesDir, filename)
-                                            file.writeText(json)
-                                            exportStatus = "Saved to app storage/$filename"
-                                        } catch (_: Exception) {
-                                            error = "Export failed: ${e.message}"
-                                        }
+                                        error = "File picker not available — use Paste instead (${e.message})"
                                     }
-                                } else {
-                                    error = res.exceptionOrNull()?.message ?: "Export failed"
-                                }
-                            }
-                        },
-                        shape = RoundedCornerShape(14.dp),
-                        color = colors.surface,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                Icons.Default.Download, null,
-                                tint = colors.success,
-                                modifier = Modifier.size(28.dp),
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "Export Firebases",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colors.onBackground,
-                                )
-                                Text(
-                                    "Download all firebases as JSON",
-                                    fontSize = 11.sp,
-                                    color = colors.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-
-                    if (exportStatus != null) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            exportStatus!!,
-                            color = colors.success,
-                            fontSize = 12.sp,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-
-                if (processing) {
-                    Spacer(Modifier.height(20.dp))
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = colors.surface,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                when (phase) {
-                                    "extracting" -> "Extracting URLs…"
-                                    "loading" -> "Loading existing firebases…"
-                                    "validating" -> "Validating URLs…"
-                                    "inserting" -> "Saving valid URLs…"
-                                    "done" -> "Done"
-                                    else -> "Processing…"
                                 },
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = colors.onBackground,
+                                advancedOpen = advancedOpen,
+                                onAdvancedToggle = { advancedOpen = !advancedOpen },
+                                useCustomRegex = useCustomRegex,
+                                onUseCustomRegexToggle = { useCustomRegex = !useCustomRegex },
+                                customRegex = customRegex,
+                                onCustomRegexChange = { customRegex = it },
+                                excludeExisting = excludeExisting,
+                                onExcludeExistingToggle = { excludeExisting = !excludeExisting },
                             )
-                            if (progressTotal > 0) {
-                                Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(
-                                    progress = {
-                                        if (progressTotal > 0)
-                                            progressCurrent.toFloat() / progressTotal
-                                        else 0f
-                                    },
-                                    color = colors.primary,
-                                    trackColor = colors.background,
-                                    modifier = Modifier.fillMaxWidth().height(6.dp),
-                                )
-                                Spacer(Modifier.height(6.dp))
-                                Text(
-                                    "$progressCurrent / $progressTotal  ·  ✅ $progressAdded",
-                                    fontSize = 11.sp,
-                                    color = colors.onSurfaceVariant,
-                                )
-                            }
+                            BulkTab.PASTE -> PasteTab(
+                                onOpenDialog = { showPasteDialog = true },
+                                advancedOpen = advancedOpen,
+                                onAdvancedToggle = { advancedOpen = !advancedOpen },
+                                useCustomRegex = useCustomRegex,
+                                onUseCustomRegexToggle = { useCustomRegex = !useCustomRegex },
+                                customRegex = customRegex,
+                                onCustomRegexChange = { customRegex = it },
+                            )
+                            BulkTab.EXPORT -> ExportTab(
+                                onExportJson = {
+                                    scope.launch {
+                                        val r = service.exportJson()
+                                        if (r.isSuccess) {
+                                            saveToDownloads(
+                                                r.getOrNull() ?: "",
+                                                "firebases_${System.currentTimeMillis()}.json",
+                                                "application/json",
+                                            )
+                                        } else error = r.exceptionOrNull()?.message
+                                    }
+                                },
+                                onExportCsv = {
+                                    scope.launch {
+                                        val r = service.exportCsv()
+                                        if (r.isSuccess) {
+                                            saveToDownloads(
+                                                r.getOrNull() ?: "",
+                                                "firebases_${System.currentTimeMillis()}.csv",
+                                                "text/csv",
+                                            )
+                                        } else error = r.exceptionOrNull()?.message
+                                    }
+                                },
+                                onExportTxt = {
+                                    scope.launch {
+                                        val r = service.exportTxtUrlsOnly()
+                                        if (r.isSuccess) {
+                                            saveToDownloads(
+                                                r.getOrNull() ?: "",
+                                                "firebases_urls_${System.currentTimeMillis()}.txt",
+                                                "text/plain",
+                                            )
+                                        } else error = r.exceptionOrNull()?.message
+                                    }
+                                },
+                                exportStatus = exportStatus,
+                            )
                         }
-                    }
-                }
 
-                if (result != null) {
-                    val r = result!!
-                    Spacer(Modifier.height(16.dp))
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = colors.surface,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    if (r.added > 0) Icons.Default.CheckCircle else Icons.Default.Error,
-                                    null,
-                                    tint = if (r.added > 0) colors.success else colors.warning,
-                                    modifier = Modifier.size(24.dp),
-                                )
-                                Spacer(Modifier.width(10.dp))
-                                Text(
-                                    "Import Complete",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colors.onBackground,
-                                )
-                            }
+                        if (error != null) {
                             Spacer(Modifier.height(12.dp))
-                            ResultRow("Total URLs detected", "${r.totalUrls}")
-                            ResultRow("✅ Added", "${r.added}", colors.success)
-                            ResultRow("⏭ Already exists", "${r.skippedExisting}")
-                            ResultRow("⏭ Duplicate in batch", "${r.skippedDuplicate}")
-                            ResultRow(
-                                "❌ Failed",
-                                "${r.failed}",
-                                if (r.failed > 0) colors.error else colors.onBackground,
+                            Text(
+                                error!!,
+                                color = colors.error,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
                             )
-                            ResultRow("🔥 Total now", "${r.existingAfter}", colors.primary)
-
-                            if (r.failureSummary.isNotBlank()) {
-                                Spacer(Modifier.height(10.dp))
-                                Text(
-                                    "Failure breakdown:",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colors.onBackground,
-                                )
-                                Text(
-                                    r.failureSummary,
-                                    fontSize = 11.sp,
-                                    color = colors.onSurfaceVariant,
-                                    fontFamily = FontFamily.Monospace,
-                                )
-                            }
                         }
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-
-                    Button(
-                        onClick = {
-                            result = null
-                            error = null
-                            exportStatus = null
-                            progressCurrent = 0
-                            progressTotal = 0
-                            progressAdded = 0
-                        },
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = colors.primary,
-                            contentColor = Color.Black,
-                        ),
-                    ) { Text("Import More", fontWeight = FontWeight.Bold) }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                        Text("Back to Admin", color = colors.onSurfaceVariant)
+                        Spacer(Modifier.height(24.dp))
                     }
                 }
 
-                if (error != null) {
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        error!!,
-                        color = colors.error,
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
+                BulkPhase.EXTRACTING -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = colors.primary)
+                            Spacer(Modifier.height(12.dp))
+                            Text("Extracting URLs…", color = colors.onSurfaceVariant, fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                BulkPhase.PREVIEW -> {
+                    PreviewPhase(
+                        extracted = extracted,
+                        selected = selected,
+                        onToggle = { i ->
+                            if (i in selected.indices) {
+                                selected[i] = !selected[i]
+                            }
+                        },
+                        onSelectAll = {
+                            for (i in selected.indices) selected[i] = true
+                        },
+                        onDeselectAll = {
+                            for (i in selected.indices) selected[i] = false
+                        },
+                        onProceed = { runValidateAndInsert() },
+                        onCancel = {
+                            extracted.clear()
+                            selected.clear()
+                            phase = BulkPhase.IDLE
+                            error = null
+                        },
                     )
                 }
 
-                Spacer(Modifier.height(24.dp))
+                BulkPhase.VALIDATING, BulkPhase.INSERTING -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            CircularProgressIndicator(color = colors.primary)
+                            Spacer(Modifier.height(16.dp))
+                            Text(
+                                phaseLabel,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.onBackground,
+                            )
+                            if (valTotal > 0) {
+                                Spacer(Modifier.height(12.dp))
+                                LinearProgressIndicator(
+                                    progress = {
+                                        if (valTotal > 0) valCurrent.toFloat() / valTotal
+                                        else 0f
+                                    },
+                                    color = colors.primary,
+                                    trackColor = colors.surface,
+                                    modifier = Modifier.fillMaxWidth().height(6.dp),
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "$valCurrent / $valTotal  ·  ✅ $valValid  ·  ❌ $valFailed",
+                                    fontSize = 11.sp,
+                                    color = colors.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(Modifier.height(20.dp))
+                            Button(
+                                onClick = { cancelFlag.set(true) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = colors.error,
+                                    contentColor = Color.White,
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                            ) { Text("Cancel", fontWeight = FontWeight.Bold) }
+                        }
+                    }
+                }
+
+                BulkPhase.RESULT -> {
+                    ResultPhase(
+                        added = addedCount,
+                        skippedExisting = skippedExisting,
+                        failureCount = failureList.size,
+                        failureList = failureList,
+                        cancelled = cancelled,
+                        showDetails = showFailureDetails,
+                        onToggleDetails = { showFailureDetails = !showFailureDetails },
+                        onDone = {
+                            extracted.clear()
+                            selected.clear()
+                            phase = BulkPhase.IDLE
+                            failureList = emptyList()
+                            addedCount = 0
+                            skippedExisting = 0
+                            cancelled = false
+                            error = null
+                        },
+                        onBack = onBack,
+                    )
+                }
             }
         }
     }
@@ -469,24 +532,11 @@ fun FirebaseBulkAddScreen(
                         val txt = pasteText.trim()
                         if (txt.isBlank()) return@TextButton
                         showPasteDialog = false
-                        scope.launch {
-                            runImport {
-                                service.importFromText(
-                                    adminUid = adminUid,
-                                    text = txt,
-                                    onProgress = { p, c, t, a ->
-                                        phase = p
-                                        progressCurrent = c
-                                        progressTotal = t
-                                        progressAdded = a
-                                    }
-                                )
-                            }
-                        }
+                        runExtractFromText(txt)
                         pasteText = ""
                     },
                     enabled = pasteText.isNotBlank(),
-                ) { Text("Import", color = colors.primary, fontWeight = FontWeight.Bold) }
+                ) { Text("Extract", color = colors.primary, fontWeight = FontWeight.Bold) }
             },
             dismissButton = {
                 TextButton(onClick = { showPasteDialog = false }) {
@@ -500,7 +550,7 @@ fun FirebaseBulkAddScreen(
             text = {
                 Column {
                     Text(
-                        "Paste any text containing URLs — one per line, or mixed.",
+                        "Paste any text with URLs — one per line or mixed.",
                         fontSize = 11.sp,
                         color = colors.onSurfaceVariant,
                     )
@@ -508,7 +558,7 @@ fun FirebaseBulkAddScreen(
                     OutlinedTextField(
                         value = pasteText,
                         onValueChange = { pasteText = it },
-                        placeholder = { Text("https://example.firebaseio.com\nhttps://other.firebasedatabase.app\n…") },
+                        placeholder = { Text("https://example.firebaseio.com\nhttps://other.firebasedatabase.app") },
                         minLines = 6,
                         maxLines = 12,
                         modifier = Modifier.fillMaxWidth(),
@@ -524,6 +574,446 @@ fun FirebaseBulkAddScreen(
     }
 }
 
+// ============================================================
+//  TABS
+// ============================================================
+@Composable
+private fun TabChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val colors = LocalSanjiColors.current
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) colors.primary else colors.surface,
+    ) {
+        Text(
+            label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (selected) Color.Black else colors.onBackground,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+    }
+}
+
+@Composable
+private fun FileTab(
+    onPick: () -> Unit,
+    advancedOpen: Boolean,
+    onAdvancedToggle: () -> Unit,
+    useCustomRegex: Boolean,
+    onUseCustomRegexToggle: () -> Unit,
+    customRegex: String,
+    onCustomRegexChange: (String) -> Unit,
+    excludeExisting: Boolean,
+    onExcludeExistingToggle: () -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    Surface(
+        onClick = onPick,
+        shape = RoundedCornerShape(14.dp),
+        color = colors.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.UploadFile, null, tint = colors.primary, modifier = Modifier.size(28.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Select Files", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                Text("Pick one or more text files", fontSize = 11.sp, color = colors.onSurfaceVariant)
+            }
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    AdvancedSection(
+        expanded = advancedOpen,
+        onToggle = onAdvancedToggle,
+        useCustomRegex = useCustomRegex,
+        onUseCustomRegexToggle = onUseCustomRegexToggle,
+        customRegex = customRegex,
+        onCustomRegexChange = onCustomRegexChange,
+        excludeExisting = excludeExisting,
+        onExcludeExistingToggle = onExcludeExistingToggle,
+    )
+}
+
+@Composable
+private fun PasteTab(
+    onOpenDialog: () -> Unit,
+    advancedOpen: Boolean,
+    onAdvancedToggle: () -> Unit,
+    useCustomRegex: Boolean,
+    onUseCustomRegexToggle: () -> Unit,
+    customRegex: String,
+    onCustomRegexChange: (String) -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    Surface(
+        onClick = onOpenDialog,
+        shape = RoundedCornerShape(14.dp),
+        color = colors.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.ContentPaste, null, tint = colors.primary, modifier = Modifier.size(28.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Paste Text", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                Text("Open paste dialog", fontSize = 11.sp, color = colors.onSurfaceVariant)
+            }
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    AdvancedSection(
+        expanded = advancedOpen,
+        onToggle = onAdvancedToggle,
+        useCustomRegex = useCustomRegex,
+        onUseCustomRegexToggle = onUseCustomRegexToggle,
+        customRegex = customRegex,
+        onCustomRegexChange = onCustomRegexChange,
+        excludeExisting = true,
+        onExcludeExistingToggle = {},
+    )
+}
+
+@Composable
+private fun AdvancedSection(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    useCustomRegex: Boolean,
+    onUseCustomRegexToggle: () -> Unit,
+    customRegex: String,
+    onCustomRegexChange: (String) -> Unit,
+    excludeExisting: Boolean,
+    onExcludeExistingToggle: () -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    Surface(
+        onClick = onToggle,
+        shape = RoundedCornerShape(12.dp),
+        color = colors.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Advanced", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground, modifier = Modifier.weight(1f))
+            Icon(
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                null,
+                tint = colors.primary,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+
+    if (expanded) {
+        Spacer(Modifier.height(8.dp))
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = colors.surface,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(12.dp)) {
+                // exclude existing
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Skip already existing", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+                        Text("Don't re-add URLs already in the list", fontSize = 10.sp, color = colors.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = excludeExisting,
+                        onCheckedChange = { onExcludeExistingToggle() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.primary,
+                            checkedTrackColor = colors.primary.copy(alpha = 0.4f),
+                        ),
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                // custom regex
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Custom regex", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+                        Text("Override URL extraction pattern", fontSize = 10.sp, color = colors.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = useCustomRegex,
+                        onCheckedChange = { onUseCustomRegexToggle() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.primary,
+                            checkedTrackColor = colors.primary.copy(alpha = 0.4f),
+                        ),
+                    )
+                }
+                if (useCustomRegex) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = customRegex,
+                        onValueChange = onCustomRegexChange,
+                        label = { Text("Regex") },
+                        placeholder = { Text("""https?://[^\s]+""") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExportTab(
+    onExportJson: () -> Unit,
+    onExportCsv: () -> Unit,
+    onExportTxt: () -> Unit,
+    exportStatus: String?,
+) {
+    val colors = LocalSanjiColors.current
+    ExportButton("JSON (full)", "Full database backup", Icons.Default.Download, onExportJson)
+    Spacer(Modifier.height(8.dp))
+    ExportButton("CSV (spreadsheet)", "Open in Excel / Sheets", Icons.Default.Download, onExportCsv)
+    Spacer(Modifier.height(8.dp))
+    ExportButton("TXT (URLs only)", "One URL per line", Icons.Default.Download, onExportTxt)
+
+    if (exportStatus != null) {
+        Spacer(Modifier.height(16.dp))
+        Text(
+            exportStatus,
+            fontSize = 12.sp,
+            color = colors.success,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun ExportButton(
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = colors.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, null, tint = colors.success, modifier = Modifier.size(24.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                Text(subtitle, fontSize = 11.sp, color = colors.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewPhase(
+    extracted: List<String>,
+    selected: List<Boolean>,
+    onToggle: (Int) -> Unit,
+    onSelectAll: () -> Unit,
+    onDeselectAll: () -> Unit,
+    onProceed: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    val selectedCount = selected.count { it }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${extracted.size} URLs found · $selectedCount selected",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onSelectAll) { Text("All", color = colors.primary, fontSize = 11.sp) }
+            TextButton(onClick = onDeselectAll) { Text("None", color = colors.onSurfaceVariant, fontSize = 11.sp) }
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        Surface(shape = RoundedCornerShape(12.dp), color = colors.surface, modifier = Modifier.fillMaxWidth().weight(1f)) {
+            LazyColumn(modifier = Modifier.fillMaxSize().padding(8.dp)) {
+                items(extracted.size) { i ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = selected.getOrElse(i) { true },
+                            onCheckedChange = { onToggle(i) },
+                            colors = CheckboxDefaults.colors(checkedColor = colors.primary),
+                        )
+                        Text(
+                            extracted.getOrNull(i) ?: "",
+                            fontSize = 11.sp,
+                            color = colors.onBackground,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 2,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onCancel,
+                modifier = Modifier.weight(1f).height(48.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.surface,
+                    contentColor = colors.onBackground,
+                ),
+            ) { Text("Cancel") }
+            Button(
+                onClick = onProceed,
+                enabled = selectedCount > 0,
+                modifier = Modifier.weight(2f).height(48.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.primary,
+                    contentColor = Color.Black,
+                ),
+            ) { Text("Validate & Add ($selectedCount)", fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
+@Composable
+private fun ResultPhase(
+    added: Int,
+    skippedExisting: Int,
+    failureCount: Int,
+    failureList: List<Pair<String, String>>,
+    cancelled: Boolean,
+    showDetails: Boolean,
+    onToggleDetails: () -> Unit,
+    onDone: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.height(24.dp))
+        Icon(
+            if (added > 0) Icons.Default.CheckCircle else Icons.Default.Error,
+            null,
+            tint = if (added > 0) colors.success else colors.warning,
+            modifier = Modifier.size(56.dp),
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            if (cancelled) "Cancelled" else "Import Complete",
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            color = colors.onBackground,
+        )
+        Spacer(Modifier.height(20.dp))
+
+        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp)) {
+                ResultRow("✅ Added", "$added", colors.success)
+                ResultRow("⏭ Already existed", "$skippedExisting")
+                ResultRow("❌ Failed", "$failureCount", if (failureCount > 0) colors.error else colors.onBackground)
+            }
+        }
+
+        if (failureList.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Surface(
+                onClick = onToggleDetails,
+                shape = RoundedCornerShape(12.dp),
+                color = colors.surface,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Show failure details (${failureList.size})",
+                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                        color = colors.onBackground, modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        if (showDetails) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        null, tint = colors.primary, modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            if (showDetails) {
+                Spacer(Modifier.height(6.dp))
+                Surface(shape = RoundedCornerShape(12.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        failureList.take(50).forEach { (url, reason) ->
+                            Text(
+                                "❌ $reason",
+                                fontSize = 10.sp, fontWeight = FontWeight.Bold, color = colors.error,
+                            )
+                            Text(
+                                url,
+                                fontSize = 10.sp, color = colors.onSurfaceVariant,
+                                fontFamily = FontFamily.Monospace, maxLines = 1,
+                            )
+                        }
+                        if (failureList.size > 50) {
+                            Text(
+                                "+${failureList.size - 50} more",
+                                fontSize = 10.sp, color = colors.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        Button(
+            onClick = onDone,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = colors.primary, contentColor = Color.Black,
+            ),
+        ) { Text("Import More", fontWeight = FontWeight.Bold) }
+
+        Spacer(Modifier.height(8.dp))
+
+        TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+            Text("Back to Admin", color = colors.onSurfaceVariant)
+        }
+
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
 @Composable
 private fun ResultRow(label: String, value: String, valueColor: Color? = null) {
     val colors = LocalSanjiColors.current
@@ -533,9 +1023,7 @@ private fun ResultRow(label: String, value: String, valueColor: Color? = null) {
     ) {
         Text(label, fontSize = 12.sp, color = colors.onSurfaceVariant)
         Text(
-            value,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
+            value, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
             color = valueColor ?: colors.onBackground,
         )
     }
