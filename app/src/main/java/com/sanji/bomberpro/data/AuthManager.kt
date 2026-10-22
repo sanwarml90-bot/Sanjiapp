@@ -5,6 +5,7 @@ import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sanji.bomberpro.FirebaseConfig
 import kotlinx.coroutines.CoroutineScope
@@ -40,9 +41,6 @@ class AuthManager(private val context: Context) {
         }
     }
 
-    // ============================================================
-    //  OWNER CACHE
-    // ============================================================
     private suspend fun getOwnerEmail(): String {
         cachedOwnerEmail?.let { return it }
         try {
@@ -64,10 +62,6 @@ class AuthManager(private val context: Context) {
         cachedOwnerEmail = null
     }
 
-    /**
-     * Call this after admin actions that may change the current user's role
-     * (e.g. transferOwnership, addRole self, etc.). Forces a fresh profile load.
-     */
     fun refreshProfile() {
         val u = auth.currentUser ?: return
         scope.launch { loadProfileAndRole(u) }
@@ -93,68 +87,125 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  EMAIL + PASSWORD
+    //  EMAIL — SIGN IN ONLY
     // ============================================================
-    suspend fun signInOrSignUpWithEmail(email: String, password: String): Result<FirebaseUser> {
+    suspend fun signInWithEmail(email: String, password: String): Result<FirebaseUser> {
         val cleanEmail = email.trim().lowercase()
         return try {
-            var user: FirebaseUser? = null
-
-            // try signin first
-            try {
-                val result = auth.signInWithEmailAndPassword(cleanEmail, password).await()
-                user = result.user
-            } catch (signInError: Exception) {
-                Log.w(TAG, "Sign-in failed, trying sign-up: ${signInError.message}")
-                // if password error -> fail clearly, don't try signup
-                val isInvalidCred = signInError.message?.contains("password is invalid", true) == true ||
-                        signInError.message?.contains("INVALID_LOGIN_CREDENTIALS", true) == true ||
-                        signInError.message?.contains("INVALID_PASSWORD", true) == true
-                if (isInvalidCred) {
-                    throw Exception("Wrong password for existing account")
-                }
-                // otherwise try signup
-                try {
-                    val result = auth.createUserWithEmailAndPassword(cleanEmail, password).await()
-                    user = result.user
-                } catch (signUpError: Exception) {
-                    Log.e(TAG, "Sign-up also failed", signUpError)
-                    throw signUpError
-                }
-            }
-
-            val finalUser = user ?: return Result.failure(Exception("No user returned"))
-            ensureUserDoc(finalUser)
-            loadProfileAndRole(finalUser)
-            Result.success(finalUser)
+            val result = auth.signInWithEmailAndPassword(cleanEmail, password).await()
+            val user = result.user
+                ?: return Result.failure(Exception("No user returned"))
+            ensureUserDoc(user)
+            loadProfileAndRole(user)
+            Result.success(user)
         } catch (e: Exception) {
-            Log.e(TAG, "Email auth failed", e)
-            val friendly = when {
-                e.message?.contains("Wrong password", true) == true ->
-                    "Wrong password for existing account"
-                e.message?.contains("password is invalid", true) == true ||
-                        e.message?.contains("INVALID_LOGIN_CREDENTIALS", true) == true ->
-                    "Wrong password"
-                e.message?.contains("already in use", true) == true ||
-                        e.message?.contains("EMAIL_EXISTS", true) == true ->
-                    "Account exists — wrong password"
-                e.message?.contains("badly formatted", true) == true ->
-                    "Invalid email format"
-                e.message?.contains("network", true) == true ->
-                    "Network error — try again"
-                e.message?.contains("too many requests", true) == true ->
-                    "Too many attempts — wait a minute"
-                else -> e.message ?: "Login failed"
-            }
+            val friendly = friendlyError(e)
             _authState.value = AuthState.Error(friendly, e)
             Result.failure(Exception(friendly))
         }
     }
 
     // ============================================================
-    //  USER DOC CREATION / UPDATE
+    //  EMAIL — SIGN UP ONLY
     // ============================================================
-    private suspend fun ensureUserDoc(user: FirebaseUser) {
+    suspend fun signUpWithEmail(
+        email: String,
+        password: String,
+        username: String,
+    ): Result<FirebaseUser> {
+        val cleanEmail = email.trim().lowercase()
+        val cleanUsername = username.trim().take(32)
+        if (cleanUsername.isBlank()) return Result.failure(Exception("Username required"))
+        if (cleanUsername.length < 3) return Result.failure(Exception("Username min 3 chars"))
+        if (!cleanUsername.matches(Regex("^[a-zA-Z0-9_]+$")))
+            return Result.failure(Exception("Username: letters, numbers, _ only"))
+        if (password.length < 6) return Result.failure(Exception("Password min 6 chars"))
+
+        return try {
+            val result = auth.createUserWithEmailAndPassword(cleanEmail, password).await()
+            val user = result.user
+                ?: return Result.failure(Exception("No user returned"))
+
+            try {
+                val profileUpdates = UserProfileChangeRequest.Builder()
+                    .setDisplayName(cleanUsername)
+                    .build()
+                user.updateProfile(profileUpdates).await()
+            } catch (_: Exception) {}
+
+            ensureUserDoc(user, username = cleanUsername)
+            loadProfileAndRole(user)
+            Result.success(user)
+        } catch (e: Exception) {
+            val friendly = friendlyError(e)
+            _authState.value = AuthState.Error(friendly, e)
+            Result.failure(Exception(friendly))
+        }
+    }
+
+    // ============================================================
+    //  BACKWARD COMPAT
+    // ============================================================
+    suspend fun signInOrSignUpWithEmail(email: String, password: String): Result<FirebaseUser> {
+        val cleanEmail = email.trim().lowercase()
+        return try {
+            var user: FirebaseUser? = null
+            try {
+                val result = auth.signInWithEmailAndPassword(cleanEmail, password).await()
+                user = result.user
+            } catch (signInError: Exception) {
+                val isInvalidCred = signInError.message?.contains("password is invalid", true) == true ||
+                        signInError.message?.contains("INVALID_LOGIN_CREDENTIALS", true) == true ||
+                        signInError.message?.contains("INVALID_PASSWORD", true) == true
+                if (isInvalidCred) {
+                    throw Exception("Wrong password for existing account")
+                }
+                try {
+                    val result = auth.createUserWithEmailAndPassword(cleanEmail, password).await()
+                    user = result.user
+                } catch (signUpError: Exception) {
+                    throw signUpError
+                }
+            }
+            val finalUser = user ?: return Result.failure(Exception("No user returned"))
+            ensureUserDoc(finalUser)
+            loadProfileAndRole(finalUser)
+            Result.success(finalUser)
+        } catch (e: Exception) {
+            val friendly = friendlyError(e)
+            _authState.value = AuthState.Error(friendly, e)
+            Result.failure(Exception(friendly))
+        }
+    }
+
+    private fun friendlyError(e: Exception): String = when {
+        e.message?.contains("Wrong password", true) == true ->
+            "Wrong password"
+        e.message?.contains("password is invalid", true) == true ||
+                e.message?.contains("INVALID_LOGIN_CREDENTIALS", true) == true ||
+                e.message?.contains("INVALID_PASSWORD", true) == true ->
+            "Wrong password"
+        e.message?.contains("already in use", true) == true ||
+                e.message?.contains("EMAIL_EXISTS", true) == true ->
+            "Email already registered — use Sign In"
+        e.message?.contains("no user record", true) == true ||
+                e.message?.contains("USER_NOT_FOUND", true) == true ->
+            "Email not registered — use Sign Up"
+        e.message?.contains("weak", true) == true ->
+            "Password too weak (min 6 chars)"
+        e.message?.contains("badly formatted", true) == true ->
+            "Invalid email format"
+        e.message?.contains("network", true) == true ->
+            "Network error — try again"
+        e.message?.contains("too many requests", true) == true ->
+            "Too many attempts — wait a minute"
+        else -> e.message ?: "Auth failed"
+    }
+
+    // ============================================================
+    //  USER DOC
+    // ============================================================
+    private suspend fun ensureUserDoc(user: FirebaseUser, username: String? = null) {
         try {
             val uid = user.uid
             val userRef = db.collection(FirebaseConfig.COL_USERS).document(uid)
@@ -165,12 +216,16 @@ class AuthManager(private val context: Context) {
                 val isOwner = user.email?.equals(ownerEmail, ignoreCase = true) == true
                 val role = if (isOwner) "owner" else "user"
                 val referCode = generateReferCode(uid)
+                val finalDisplayName = username
+                    ?: user.displayName
+                    ?: (user.email?.substringBefore("@") ?: "")
 
                 userRef.set(
                     mapOf(
                         "uid" to uid,
                         "email" to (user.email ?: ""),
-                        "displayName" to (user.displayName ?: (user.email?.substringBefore("@") ?: "")),
+                        "displayName" to finalDisplayName,
+                        "username" to (username ?: finalDisplayName),
                         "photoUrl" to (user.photoUrl?.toString() ?: ""),
                         "role" to role,
                         "credits" to 0,
@@ -222,6 +277,7 @@ class AuthManager(private val context: Context) {
                 val updates = mutableMapOf<String, Any>("lastActive" to nowSec())
                 user.displayName?.let { if (it.isNotBlank()) updates["displayName"] = it }
                 user.photoUrl?.let { updates["photoUrl"] = it.toString() }
+                if (username != null) updates["username"] = username
                 try {
                     userRef.update(updates).await()
                 } catch (_: Exception) {}
@@ -232,7 +288,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  LOAD PROFILE + ROLE + TERMS STATE
+    //  LOAD PROFILE + ROLE + GATE INFO
     // ============================================================
     private suspend fun loadProfileAndRole(user: FirebaseUser) {
         try {
@@ -264,12 +320,15 @@ class AuthManager(private val context: Context) {
                 if (profileDoc.exists()) {
                     @Suppress("UNCHECKED_CAST")
                     val sub = profileDoc.get("subscription") as? Map<String, Any?> ?: emptyMap()
+                    val dn = profileDoc.getString("displayName")
+                        ?: user.displayName
+                        ?: (user.email?.substringBefore("@") ?: "User")
+                    val un = profileDoc.getString("username") ?: dn
                     profile = UserProfile(
                         uid = user.uid,
                         email = profileDoc.getString("email") ?: email,
-                        displayName = profileDoc.getString("displayName")
-                            ?: user.displayName
-                            ?: (user.email?.substringBefore("@") ?: "User"),
+                        displayName = dn,
+                        username = un,
                         photoUrl = profileDoc.getString("photoUrl"),
                         role = profileDoc.getString("role") ?: "user",
                         credits = (profileDoc.getLong("credits") ?: 0L).toInt(),
@@ -293,7 +352,6 @@ class AuthManager(private val context: Context) {
                         lastActive = profileDoc.getLong("lastActive") ?: 0L,
                     )
 
-                    // sync role if changed (e.g. transfer ownership)
                     val storedRole = profileDoc.getString("role") ?: "user"
                     val computedRole = when (role) {
                         UserRole.OWNER -> "owner"
@@ -307,9 +365,24 @@ class AuthManager(private val context: Context) {
                                 .update("role", computedRole).await()
                         } catch (_: Exception) {}
                     }
+                } else {
+                    // fallback: user doc missing — create minimal profile
+                    // so terms gate can fire (termsAccepted defaults to false)
+                    profile = UserProfile(
+                        uid = user.uid,
+                        email = email,
+                        displayName = user.displayName ?: (email.substringBefore("@")),
+                        username = user.displayName ?: (email.substringBefore("@")),
+                        role = when (role) {
+                            UserRole.OWNER -> "owner"
+                            UserRole.SUPER_ADMIN -> "super_admin"
+                            UserRole.ADMIN -> "admin"
+                            else -> "user"
+                        },
+                    )
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Profile load failed, proceeding with null profile", e)
+                Log.w(TAG, "Profile load failed", e)
             }
 
             _authState.value = AuthState.LoggedIn(user, role, profile)
@@ -320,7 +393,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  TERMS ACCEPTANCE
+    //  TERMS
     // ============================================================
     suspend fun acceptTerms(version: Int): Boolean {
         val user = auth.currentUser ?: return false
@@ -338,6 +411,29 @@ class AuthManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "acceptTerms failed", e)
             false
+        }
+    }
+
+    // ============================================================
+    //  USERNAME UPDATE
+    // ============================================================
+    suspend fun updateUsername(newUsername: String): Result<Unit> {
+        val user = auth.currentUser ?: return Result.failure(Exception("Not signed in"))
+        val clean = newUsername.trim().take(32)
+        if (clean.length < 3) return Result.failure(Exception("Username min 3 chars"))
+        if (!clean.matches(Regex("^[a-zA-Z0-9_]+$")))
+            return Result.failure(Exception("Letters, numbers, _ only"))
+        return try {
+            val profileUpdates = UserProfileChangeRequest.Builder()
+                .setDisplayName(clean)
+                .build()
+            user.updateProfile(profileUpdates).await()
+            db.collection(FirebaseConfig.COL_USERS).document(user.uid)
+                .update("username", clean, "displayName", clean).await()
+            loadProfileAndRole(user)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 
