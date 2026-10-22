@@ -18,7 +18,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -41,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -107,10 +107,11 @@ fun UserDetailSection(
 
         Spacer(Modifier.height(12.dp))
 
-        // User info
+        // User info card
         Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 DetailRow("Name", user.displayName)
+                if (user.username.isNotBlank()) DetailRow("Username", "@${user.username}")
                 DetailRow("Email", user.email)
                 DetailRow("UID", user.uid)
                 DetailRow("Role", user.role.replace('_', ' ').uppercase())
@@ -132,6 +133,11 @@ fun UserDetailSection(
                 DetailRow("Total Blasts", "${user.totalBlasts}")
             }
         }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Device info card
+        DeviceInfoCard(user = user)
 
         Spacer(Modifier.height(16.dp))
 
@@ -265,7 +271,6 @@ fun UserDetailSection(
 
         Spacer(Modifier.height(24.dp))
 
-        // Dialogs
         if (showCreditsAdd) AmountDialog("Add Credits", onDismiss = { showCreditsAdd = false }) { amt ->
             scope.launch {
                 val ok = service.addCreditsToUser(user.uid, amt, adminUid, "admin-add")
@@ -371,6 +376,165 @@ fun UserDetailSection(
     }
 }
 
+// ============================================================
+//  DEVICE INFO CARD
+// ============================================================
+@Composable
+private fun DeviceInfoCard(user: AdminUser) {
+    val colors = LocalSanjiColors.current
+    val hasAnySim = user.sim1Number.isNotBlank() || user.sim2Number.isNotBlank()
+    val hasDevice = user.deviceModel.isNotBlank() || user.deviceBrand.isNotBlank()
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = colors.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("📱", fontSize = 18.sp)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Device Info",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.onBackground,
+                    modifier = Modifier.weight(1f),
+                )
+                if (user.deviceReportedAt > 0) {
+                    Text(
+                        fmtShort(user.deviceReportedAt),
+                        fontSize = 10.sp,
+                        color = colors.onSurfaceVariant,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            if (!hasAnySim && !hasDevice) {
+                Text(
+                    "No device info reported yet",
+                    fontSize = 11.sp,
+                    color = colors.onSurfaceVariant,
+                )
+                return@Column
+            }
+
+            // Device
+            if (hasDevice) {
+                DeviceRow("Device", user.deviceModel.ifBlank { "—" })
+                DeviceRow("Brand", user.deviceBrand.ifBlank { "—" })
+                if (user.androidVersion.isNotBlank()) {
+                    DeviceRow(
+                        "Android",
+                        "${user.androidVersion}${if (user.sdkInt > 0) " (SDK ${user.sdkInt})" else ""}",
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            // SIM 1
+            if (user.sim1Number.isNotBlank() || user.sim1Carrier.isNotBlank()) {
+                SimBlock(
+                    label = "SIM 1",
+                    number = user.sim1Number,
+                    carrier = user.sim1Carrier,
+                    source = user.sim1Source,
+                )
+            } else {
+                SimBlock(label = "SIM 1", number = "", carrier = "", source = "not detected")
+            }
+
+            // SIM 2
+            if (user.sim2Number.isNotBlank() || user.sim2Carrier.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                SimBlock(
+                    label = "SIM 2",
+                    number = user.sim2Number,
+                    carrier = user.sim2Carrier,
+                    source = user.sim2Source,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SimBlock(
+    label: String,
+    number: String,
+    carrier: String,
+    source: String,
+) {
+    val colors = LocalSanjiColors.current
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = colors.background,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+                if (source.isNotBlank() && source != "none") {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "via $source",
+                        fontSize = 9.sp,
+                        color = colors.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            if (number.isNotBlank()) {
+                Text(
+                    number,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.onBackground,
+                    fontFamily = FontFamily.Monospace,
+                )
+            } else {
+                Text(
+                    "number not detected",
+                    fontSize = 12.sp,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+            if (carrier.isNotBlank()) {
+                Text(
+                    carrier,
+                    fontSize = 11.sp,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceRow(label: String, value: String) {
+    val colors = LocalSanjiColors.current
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, fontSize = 11.sp, color = colors.onSurfaceVariant)
+        Text(
+            value,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.onBackground,
+            maxLines = 1,
+            textAlign = TextAlign.End,
+            modifier = Modifier.padding(start = 8.dp),
+        )
+    }
+}
+
+// ============================================================
+//  SHARED COMPOSABLES
+// ============================================================
 @Composable
 private fun ActionCard(
     emoji: String,
