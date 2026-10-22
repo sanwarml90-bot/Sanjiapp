@@ -1,5 +1,8 @@
 package com.sanji.bomberpro.ui.admin
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,7 +63,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class AdminView {
-    HOME, FIREBASE, FIREBASE_BULK, USERS, USER_DETAIL, ROLES,
+    HOME, FIREBASE, FIREBASE_BULK, USERS, USER_DETAIL, USER_SMS_HISTORY, ROLES,
     SETTINGS, BROADCAST, REDEEM, PRICING,
     LOGS, ANALYTICS,
     GIVEAWAY_LIST, GIVEAWAY_CREATE,
@@ -96,6 +99,16 @@ fun AdminScreen(
 
     var showBulkAdd by remember { mutableStateOf(false) }
     var showBulkDeduct by remember { mutableStateOf(false) }
+
+    // ============================================================
+    //  file picker at STABLE level (AdminScreen) — never re-registers
+    // ============================================================
+    var pendingFileUris by remember { mutableStateOf<List<Uri>?>(null) }
+    val multiFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents(),
+    ) { uris ->
+        if (uris.isNotEmpty()) pendingFileUris = uris
+    }
 
     fun loadFirebases() {
         scope.launch {
@@ -157,6 +170,15 @@ fun AdminScreen(
             adminUid = adminUid,
             onBack = { view = AdminView.HOME },
             onCompleted = { loadFirebases() },
+            onPickFiles = {
+                try {
+                    multiFilePicker.launch("*/*")
+                } catch (e: Exception) {
+                    error = "File picker unavailable: ${e.message}"
+                }
+            },
+            pendingFileUris = pendingFileUris,
+            onConsumed = { pendingFileUris = null },
         )
 
         AdminView.FIREBASE -> Column(
@@ -309,8 +331,18 @@ fun AdminScreen(
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(users) { u ->
+                        val isOwnerTarget = u.role == "owner" || u.role == "super_admin"
                         Surface(
-                            onClick = { selectedUser = u; view = AdminView.USER_DETAIL },
+                            onClick = {
+                                if (!isOwner) {
+                                    error = "Only owner can view user details"
+                                } else if (isOwnerTarget && !isOwner) {
+                                    error = "Cannot view admin details"
+                                } else {
+                                    selectedUser = u
+                                    view = AdminView.USER_DETAIL
+                                }
+                            },
                             shape = RoundedCornerShape(12.dp),
                             color = colors.surface,
                             modifier = Modifier.fillMaxWidth(),
@@ -369,23 +401,47 @@ fun AdminScreen(
         }
 
         AdminView.USER_DETAIL -> {
-            val u = selectedUser
-            if (u == null) {
+            if (!isOwner) {
+                LaunchedEffect(Unit) {
+                    error = "Only owner can view details"
+                    view = AdminView.USERS
+                }
+            } else {
+                val u = selectedUser
+                if (u == null) {
+                    LaunchedEffect(Unit) { view = AdminView.USERS }
+                } else {
+                    UserDetailSection(
+                        user = u,
+                        adminUid = adminUid,
+                        isOwner = isOwner,
+                        service = adminService,
+                        onBack = { view = AdminView.USERS },
+                        onOpenSmsHistory = { view = AdminView.USER_SMS_HISTORY },
+                        onRefresh = {
+                            scope.launch {
+                                val fresh = adminService.getUserDetail(u.uid)
+                                if (fresh != null) selectedUser = fresh
+                            }
+                        },
+                    )
+                }
+            }
+        }
+
+        AdminView.USER_SMS_HISTORY -> {
+            if (!isOwner) {
                 LaunchedEffect(Unit) { view = AdminView.USERS }
             } else {
-                UserDetailSection(
-                    user = u,
-                    adminUid = adminUid,
-                    isOwner = isOwner,
-                    service = adminService,
-                    onBack = { view = AdminView.USERS },
-                    onRefresh = {
-                        scope.launch {
-                            val fresh = adminService.getUserDetail(u.uid)
-                            if (fresh != null) selectedUser = fresh
-                        }
-                    },
-                )
+                val u = selectedUser
+                if (u == null) {
+                    LaunchedEffect(Unit) { view = AdminView.USERS }
+                } else {
+                    AdminUserSmsHistoryScreen(
+                        user = u,
+                        onBack = { view = AdminView.USER_DETAIL },
+                    )
+                }
             }
         }
 
@@ -540,7 +596,7 @@ private fun AdminHomeMenu(
 
         AdminMenuCard("🔥", "Manage Firebases", "Add / remove / enable realtime DB nodes", onOpenFirebase)
         AdminMenuCard("📁", "Bulk Add Firebases", "Import from file or paste — validates URLs", onOpenFirebaseBulk)
-        AdminMenuCard("👥", "Users", "Search, view, credits, ban, limits, notes, tags, subscription, SIM", onOpenUsers)
+        AdminMenuCard("👥", "Users", if (isOwner) "Full user access" else "List only · owner views details", onOpenUsers)
         if (isOwner) {
             AdminMenuCard("🔱", "Roles & Admins", "Add/remove super admins and admins · transfer ownership", onOpenRoles)
             AdminMenuCard("⚙️", "Settings", "OTP cost, referral rewards, UPI, maintenance, force update", onOpenSettings)
@@ -553,8 +609,10 @@ private fun AdminHomeMenu(
         }
         AdminMenuCard("📜", "Logs", "Activity · Audit · Payment history", onOpenLogs)
         AdminMenuCard("📊", "Analytics", "Users · Revenue · Daily stats", onOpenAnalytics)
-        AdminMenuCard("💰", "Bulk Add Credits", "Add credits to every user at once", onOpenBulkAdd)
-        AdminMenuCard("💸", "Bulk Deduct Credits", "Deduct from manual pool only · purchased credits untouched", onOpenBulkDeduct)
+        if (isOwner) {
+            AdminMenuCard("💰", "Bulk Add Credits", "Add credits to every user at once", onOpenBulkAdd)
+            AdminMenuCard("💸", "Bulk Deduct Credits", "Deduct from manual pool only · purchased credits untouched", onOpenBulkDeduct)
+        }
 
         Spacer(Modifier.height(24.dp))
     }
