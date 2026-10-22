@@ -1,24 +1,27 @@
 package com.sanji.bomberpro.services
 
 import android.util.Log
+import com.google.firebase.firestore.FirebaseFirestore
+import com.sanji.bomberpro.FirebaseConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * In-process scheduler ticker.
  * Runs while the app is open. Every 30s checks due schedules and fires them.
  *
- * NOTE: Does NOT fire if app is fully closed. For 24/7 scheduled blasts,
- * the user must keep the app open OR use the bot. This matches current app
- * architecture — a proper background worker will be added in a later session.
+ * NOTE: Does NOT fire if the app is fully closed. Schedules fire only while
+ * the app process is alive. For 24/7 blasts, keep app open or use the bot.
  */
 class SchedulerTicker(private val scope: CoroutineScope) {
 
+    private val db = FirebaseFirestore.getInstance()
     private val schedulerService = SchedulerService()
     private val userData = UserDataService()
     private val rtdb = RealtimeDbService()
@@ -48,7 +51,6 @@ class SchedulerTicker(private val scope: CoroutineScope) {
         val due = schedulerService.getDueSchedules()
         if (due.isEmpty()) return
 
-        // load devices once per tick
         val devices = try {
             val fbs = rtdb.loadFirebases()
             rtdb.scanAll(fbs)
@@ -74,21 +76,33 @@ class SchedulerTicker(private val scope: CoroutineScope) {
     ) {
         if (!schedulerService.markRunning(schedule.id)) return
 
-        val d = userData.getUserProfile(schedule.uid)
-        if (d == null) {
+        // direct user doc read
+        val userDoc = try {
+            db.collection(FirebaseConfig.COL_USERS).document(schedule.uid).get().await()
+        } catch (e: Exception) {
+            Log.w(TAG, "user read failed: ${schedule.uid}", e)
+            null
+        }
+
+        if (userDoc == null || !userDoc.exists()) {
             schedulerService.markComplete(schedule.id, ScheduledRunResult(error = "user missing"))
             return
         }
-        if (d.banned) {
+
+        val banned = userDoc.getBoolean("banned") ?: false
+        if (banned) {
             schedulerService.markComplete(schedule.id, ScheduledRunResult(error = "user banned"))
             return
         }
+
+        val userRole = userDoc.getString("role") ?: "user"
+        val isAdmin = userRole == "owner" || userRole == "super_admin" || userRole == "admin"
+
         if (devices.isEmpty()) {
             schedulerService.markComplete(schedule.id, ScheduledRunResult(error = "no devices"))
             return
         }
 
-        val isAdmin = d.role == "owner" || d.role == "super_admin" || d.role == "admin"
         val speedEnum = try {
             BlastSpeed.valueOf(schedule.speed.uppercase())
         } catch (_: Exception) {
@@ -134,7 +148,6 @@ class SchedulerTicker(private val scope: CoroutineScope) {
             errorMsg = e.message
         }
 
-        // log activity
         try {
             userData.logActivity(
                 uid = schedule.uid,
@@ -153,10 +166,8 @@ class SchedulerTicker(private val scope: CoroutineScope) {
             )
         } catch (_: Exception) {}
 
-        // notify user in-app
         try {
-            val notifRef = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-                .collection("notifications").document()
+            val notifRef = db.collection(FirebaseConfig.COL_NOTIFICATIONS).document()
             notifRef.set(
                 mapOf(
                     "id" to notifRef.id,
