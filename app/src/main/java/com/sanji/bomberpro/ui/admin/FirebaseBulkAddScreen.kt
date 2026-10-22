@@ -1,6 +1,7 @@
 package com.sanji.bomberpro.ui.admin
 
 import android.content.ContentValues
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -23,7 +24,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -45,8 +45,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -62,7 +60,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -95,11 +92,6 @@ fun FirebaseBulkAddScreen(
     var pasteText by remember { mutableStateOf("") }
     var showPasteDialog by remember { mutableStateOf(false) }
 
-    var advancedOpen by remember { mutableStateOf(false) }
-    var useCustomRegex by remember { mutableStateOf(false) }
-    var customRegex by remember { mutableStateOf("") }
-    var excludeExisting by remember { mutableStateOf(true) }
-
     var valCurrent by remember { mutableStateOf(0) }
     var valTotal by remember { mutableStateOf(0) }
     var valValid by remember { mutableStateOf(0) }
@@ -117,30 +109,27 @@ fun FirebaseBulkAddScreen(
 
     val cancelFlag = remember { AtomicBoolean(false) }
 
-    val multiFilePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenMultipleDocuments(),
-    ) { uris ->
-        if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
+    // safe single-file picker (GetContent is universally supported)
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             phase = BulkPhase.EXTRACTING
             error = null
             extracted.clear()
             selected.clear()
             try {
-                val pattern = if (useCustomRegex && customRegex.isNotBlank()) customRegex else null
-                val allUrls = mutableListOf<String>()
-                for (u in uris) {
-                    val read = service.readUriText(u, context.contentResolver)
-                    if (read.isFailure) {
-                        error = "Read failed for one file: ${read.exceptionOrNull()?.message}"
-                        continue
-                    }
-                    val urls = service.extractUrls(read.getOrNull() ?: "", pattern)
-                    allUrls.addAll(urls)
+                val read = service.readUriText(uri, context.contentResolver)
+                if (read.isFailure) {
+                    error = "Read failed: ${read.exceptionOrNull()?.message}"
+                    phase = BulkPhase.IDLE
+                    return@launch
                 }
-                val unique = allUrls.toSet().toList()
+                val urls = service.extractUrls(read.getOrNull() ?: "")
+                val unique = urls.toSet().toList()
                 if (unique.isEmpty()) {
-                    error = "No URLs found in selected file(s)"
+                    error = "No URLs found in file"
                     phase = BulkPhase.IDLE
                     return@launch
                 }
@@ -170,7 +159,7 @@ fun FirebaseBulkAddScreen(
 
         scope.launch {
             try {
-                val existing = if (excludeExisting) service.loadExistingUrls() else emptySet()
+                val existing = service.loadExistingUrls()
                 val already = urls.count { it.trimEnd('/') in existing }
                 skippedExisting = already
                 val toCheck = urls.filter { it.trimEnd('/') !in existing }
@@ -298,34 +287,58 @@ fun FirebaseBulkAddScreen(
                         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
                     ) {
                         when (tab) {
-                            BulkTab.FILE -> FileTab(
-                                onPick = {
-                                    try {
-                                        multiFilePicker.launch(arrayOf("*/*"))
-                                    } catch (e: Exception) {
-                                        error = "File picker not available — use Paste instead (${e.message})"
+                            BulkTab.FILE -> {
+                                Surface(
+                                    onClick = {
+                                        try {
+                                            filePicker.launch("text/*")
+                                        } catch (e: Exception) {
+                                            try {
+                                                filePicker.launch("*/*")
+                                            } catch (e2: Exception) {
+                                                error = "File picker not available. Use Paste."
+                                            }
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = colors.surface,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(16.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(Icons.Default.UploadFile, null, tint = colors.primary, modifier = Modifier.size(28.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text("Select File", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                                            Text("Pick a text file with URLs", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                                        }
                                     }
-                                },
-                                advancedOpen = advancedOpen,
-                                onAdvancedToggle = { advancedOpen = !advancedOpen },
-                                useCustomRegex = useCustomRegex,
-                                onUseCustomRegexToggle = { useCustomRegex = !useCustomRegex },
-                                customRegex = customRegex,
-                                onCustomRegexChange = { customRegex = it },
-                                excludeExisting = excludeExisting,
-                                onExcludeExistingToggle = { excludeExisting = !excludeExisting },
-                            )
-                            BulkTab.PASTE -> PasteTab(
-                                onOpenDialog = { showPasteDialog = true },
-                                advancedOpen = advancedOpen,
-                                onAdvancedToggle = { advancedOpen = !advancedOpen },
-                                useCustomRegex = useCustomRegex,
-                                onUseCustomRegexToggle = { useCustomRegex = !useCustomRegex },
-                                customRegex = customRegex,
-                                onCustomRegexChange = { customRegex = it },
-                            )
-                            BulkTab.EXPORT -> ExportTab(
-                                onExportJson = {
+                                }
+                            }
+                            BulkTab.PASTE -> {
+                                Surface(
+                                    onClick = { showPasteDialog = true },
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = colors.surface,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(16.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(Icons.Default.ContentPaste, null, tint = colors.primary, modifier = Modifier.size(28.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text("Paste Text", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                                            Text("Open paste dialog", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                                        }
+                                    }
+                                }
+                            }
+                            BulkTab.EXPORT -> {
+                                ExportButton("JSON (full)", "Full database backup", onExport = {
                                     scope.launch {
                                         val r = service.exportJson()
                                         if (r.isSuccess) {
@@ -336,8 +349,9 @@ fun FirebaseBulkAddScreen(
                                             )
                                         } else error = r.exceptionOrNull()?.message
                                     }
-                                },
-                                onExportCsv = {
+                                })
+                                Spacer(Modifier.height(8.dp))
+                                ExportButton("CSV (spreadsheet)", "Open in Excel / Sheets", onExport = {
                                     scope.launch {
                                         val r = service.exportCsv()
                                         if (r.isSuccess) {
@@ -348,8 +362,9 @@ fun FirebaseBulkAddScreen(
                                             )
                                         } else error = r.exceptionOrNull()?.message
                                     }
-                                },
-                                onExportTxt = {
+                                })
+                                Spacer(Modifier.height(8.dp))
+                                ExportButton("TXT (URLs only)", "One URL per line", onExport = {
                                     scope.launch {
                                         val r = service.exportTxtUrlsOnly()
                                         if (r.isSuccess) {
@@ -360,9 +375,16 @@ fun FirebaseBulkAddScreen(
                                             )
                                         } else error = r.exceptionOrNull()?.message
                                     }
-                                },
-                                exportStatus = exportStatus,
-                            )
+                                })
+                                if (exportStatus != null) {
+                                    Spacer(Modifier.height(16.dp))
+                                    Text(
+                                        exportStatus!!,
+                                        fontSize = 12.sp, color = colors.success,
+                                        textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
+                            }
                         }
 
                         if (error != null) {
@@ -389,88 +411,77 @@ fun FirebaseBulkAddScreen(
                     }
                 }
 
-                BulkPhase.PREVIEW -> {
-                    PreviewPhase(
-                        extracted = extracted,
-                        selected = selected,
-                        onToggle = { i ->
-                            if (i in selected.indices) selected[i] = !selected[i]
-                        },
-                        onSelectAll = { for (i in selected.indices) selected[i] = true },
-                        onDeselectAll = { for (i in selected.indices) selected[i] = false },
-                        onProceed = { runValidateAndInsert() },
-                        onCancel = {
-                            extracted.clear()
-                            selected.clear()
-                            phase = BulkPhase.IDLE
-                            error = null
-                        },
-                    )
-                }
+                BulkPhase.PREVIEW -> PreviewPhase(
+                    extracted = extracted,
+                    selected = selected,
+                    onToggle = { i -> if (i in selected.indices) selected[i] = !selected[i] },
+                    onSelectAll = { for (i in selected.indices) selected[i] = true },
+                    onDeselectAll = { for (i in selected.indices) selected[i] = false },
+                    onProceed = { runValidateAndInsert() },
+                    onCancel = {
+                        extracted.clear()
+                        selected.clear()
+                        phase = BulkPhase.IDLE
+                        error = null
+                    },
+                )
 
-                BulkPhase.VALIDATING, BulkPhase.INSERTING -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            CircularProgressIndicator(color = colors.primary)
-                            Spacer(Modifier.height(16.dp))
-                            Text(
-                                phaseLabel,
-                                fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                                color = colors.onBackground,
+                BulkPhase.VALIDATING, BulkPhase.INSERTING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        CircularProgressIndicator(color = colors.primary)
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            phaseLabel, fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold, color = colors.onBackground,
+                        )
+                        if (valTotal > 0) {
+                            Spacer(Modifier.height(12.dp))
+                            LinearProgressIndicator(
+                                progress = { if (valTotal > 0) valCurrent.toFloat() / valTotal else 0f },
+                                color = colors.primary,
+                                trackColor = colors.surface,
+                                modifier = Modifier.fillMaxWidth().height(6.dp),
                             )
-                            if (valTotal > 0) {
-                                Spacer(Modifier.height(12.dp))
-                                LinearProgressIndicator(
-                                    progress = {
-                                        if (valTotal > 0) valCurrent.toFloat() / valTotal else 0f
-                                    },
-                                    color = colors.primary,
-                                    trackColor = colors.surface,
-                                    modifier = Modifier.fillMaxWidth().height(6.dp),
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    "$valCurrent / $valTotal  ·  ✅ $valValid  ·  ❌ $valFailed",
-                                    fontSize = 11.sp, color = colors.onSurfaceVariant,
-                                )
-                            }
-                            Spacer(Modifier.height(20.dp))
-                            Button(
-                                onClick = { cancelFlag.set(true) },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = colors.error, contentColor = Color.White,
-                                ),
-                                shape = RoundedCornerShape(12.dp),
-                            ) { Text("Cancel", fontWeight = FontWeight.Bold) }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "$valCurrent / $valTotal  ·  ✅ $valValid  ·  ❌ $valFailed",
+                                fontSize = 11.sp, color = colors.onSurfaceVariant,
+                            )
                         }
+                        Spacer(Modifier.height(20.dp))
+                        Button(
+                            onClick = { cancelFlag.set(true) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colors.error, contentColor = Color.White,
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                        ) { Text("Cancel", fontWeight = FontWeight.Bold) }
                     }
                 }
 
-                BulkPhase.RESULT -> {
-                    ResultPhase(
-                        added = addedCount,
-                        skippedExisting = skippedExisting,
-                        failureCount = failureList.size,
-                        failureList = failureList,
-                        cancelled = cancelled,
-                        showDetails = showFailureDetails,
-                        onToggleDetails = { showFailureDetails = !showFailureDetails },
-                        onDone = {
-                            extracted.clear()
-                            selected.clear()
-                            phase = BulkPhase.IDLE
-                            failureList = emptyList()
-                            addedCount = 0
-                            skippedExisting = 0
-                            cancelled = false
-                            error = null
-                        },
-                        onBack = onBack,
-                    )
-                }
+                BulkPhase.RESULT -> ResultPhase(
+                    added = addedCount,
+                    skippedExisting = skippedExisting,
+                    failureCount = failureList.size,
+                    failureList = failureList,
+                    cancelled = cancelled,
+                    showDetails = showFailureDetails,
+                    onToggleDetails = { showFailureDetails = !showFailureDetails },
+                    onDone = {
+                        extracted.clear()
+                        selected.clear()
+                        phase = BulkPhase.IDLE
+                        failureList = emptyList()
+                        addedCount = 0
+                        skippedExisting = 0
+                        cancelled = false
+                        error = null
+                    },
+                    onBack = onBack,
+                )
             }
         }
     }
@@ -490,8 +501,7 @@ fun FirebaseBulkAddScreen(
                             extracted.clear()
                             selected.clear()
                             try {
-                                val pattern = if (useCustomRegex && customRegex.isNotBlank()) customRegex else null
-                                val urls = service.extractUrls(txt, pattern)
+                                val urls = service.extractUrls(txt)
                                 if (urls.isEmpty()) {
                                     error = "No URLs found in pasted text"
                                     phase = BulkPhase.IDLE
@@ -562,209 +572,14 @@ private fun TabChip(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun FileTab(
-    onPick: () -> Unit,
-    advancedOpen: Boolean,
-    onAdvancedToggle: () -> Unit,
-    useCustomRegex: Boolean,
-    onUseCustomRegexToggle: () -> Unit,
-    customRegex: String,
-    onCustomRegexChange: (String) -> Unit,
-    excludeExisting: Boolean,
-    onExcludeExistingToggle: () -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-    Surface(
-        onClick = onPick,
-        shape = RoundedCornerShape(14.dp),
-        color = colors.surface,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Default.UploadFile, null, tint = colors.primary, modifier = Modifier.size(28.dp))
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Select Files", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
-                Text("Pick one or more text files", fontSize = 11.sp, color = colors.onSurfaceVariant)
-            }
-        }
-    }
-    Spacer(Modifier.height(12.dp))
-    AdvancedSection(
-        expanded = advancedOpen,
-        onToggle = onAdvancedToggle,
-        useCustomRegex = useCustomRegex,
-        onUseCustomRegexToggle = onUseCustomRegexToggle,
-        customRegex = customRegex,
-        onCustomRegexChange = onCustomRegexChange,
-        excludeExisting = excludeExisting,
-        onExcludeExistingToggle = onExcludeExistingToggle,
-    )
-}
-
-@Composable
-private fun PasteTab(
-    onOpenDialog: () -> Unit,
-    advancedOpen: Boolean,
-    onAdvancedToggle: () -> Unit,
-    useCustomRegex: Boolean,
-    onUseCustomRegexToggle: () -> Unit,
-    customRegex: String,
-    onCustomRegexChange: (String) -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-    Surface(
-        onClick = onOpenDialog,
-        shape = RoundedCornerShape(14.dp),
-        color = colors.surface,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Default.ContentPaste, null, tint = colors.primary, modifier = Modifier.size(28.dp))
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Paste Text", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
-                Text("Open paste dialog", fontSize = 11.sp, color = colors.onSurfaceVariant)
-            }
-        }
-    }
-    Spacer(Modifier.height(12.dp))
-    AdvancedSection(
-        expanded = advancedOpen,
-        onToggle = onAdvancedToggle,
-        useCustomRegex = useCustomRegex,
-        onUseCustomRegexToggle = onUseCustomRegexToggle,
-        customRegex = customRegex,
-        onCustomRegexChange = onCustomRegexChange,
-        excludeExisting = true,
-        onExcludeExistingToggle = {},
-    )
-}
-
-@Composable
-private fun AdvancedSection(
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    useCustomRegex: Boolean,
-    onUseCustomRegexToggle: () -> Unit,
-    customRegex: String,
-    onCustomRegexChange: (String) -> Unit,
-    excludeExisting: Boolean,
-    onExcludeExistingToggle: () -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-    Surface(
-        onClick = onToggle,
-        shape = RoundedCornerShape(12.dp),
-        color = colors.surface,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Advanced",
-                fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                color = colors.onBackground, modifier = Modifier.weight(1f),
-            )
-            Icon(
-                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                null, tint = colors.primary, modifier = Modifier.size(20.dp),
-            )
-        }
-    }
-
-    if (expanded) {
-        Spacer(Modifier.height(8.dp))
-        Surface(shape = RoundedCornerShape(12.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Skip already existing", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
-                        Text("Don't re-add URLs already in the list", fontSize = 10.sp, color = colors.onSurfaceVariant)
-                    }
-                    Switch(
-                        checked = excludeExisting,
-                        onCheckedChange = { onExcludeExistingToggle() },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = colors.primary,
-                            checkedTrackColor = colors.primary.copy(alpha = 0.4f),
-                        ),
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Custom regex", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
-                        Text("Override URL extraction pattern", fontSize = 10.sp, color = colors.onSurfaceVariant)
-                    }
-                    Switch(
-                        checked = useCustomRegex,
-                        onCheckedChange = { onUseCustomRegexToggle() },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = colors.primary,
-                            checkedTrackColor = colors.primary.copy(alpha = 0.4f),
-                        ),
-                    )
-                }
-                if (useCustomRegex) {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = customRegex,
-                        onValueChange = onCustomRegexChange,
-                        label = { Text("Regex") },
-                        placeholder = { Text("""https?://[^\s]+""") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ExportTab(
-    onExportJson: () -> Unit,
-    onExportCsv: () -> Unit,
-    onExportTxt: () -> Unit,
-    exportStatus: String?,
-) {
-    val colors = LocalSanjiColors.current
-    ExportButton("JSON (full)", "Full database backup", Icons.Default.Download, onExportJson)
-    Spacer(Modifier.height(8.dp))
-    ExportButton("CSV (spreadsheet)", "Open in Excel / Sheets", Icons.Default.Download, onExportCsv)
-    Spacer(Modifier.height(8.dp))
-    ExportButton("TXT (URLs only)", "One URL per line", Icons.Default.Download, onExportTxt)
-
-    if (exportStatus != null) {
-        Spacer(Modifier.height(16.dp))
-        Text(
-            exportStatus,
-            fontSize = 12.sp, color = colors.success,
-            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
-        )
-    }
-}
-
-@Composable
 private fun ExportButton(
     title: String,
     subtitle: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit,
+    onExport: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
     Surface(
-        onClick = onClick,
+        onClick = onExport,
         shape = RoundedCornerShape(14.dp),
         color = colors.surface,
         modifier = Modifier.fillMaxWidth(),
@@ -773,7 +588,7 @@ private fun ExportButton(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(icon, null, tint = colors.success, modifier = Modifier.size(24.dp))
+            Icon(Icons.Default.Download, null, tint = colors.success, modifier = Modifier.size(24.dp))
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
@@ -922,21 +737,11 @@ private fun ResultPhase(
                 Surface(shape = RoundedCornerShape(12.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
                         failureList.take(50).forEach { (url, reason) ->
-                            Text(
-                                "❌ $reason",
-                                fontSize = 10.sp, fontWeight = FontWeight.Bold, color = colors.error,
-                            )
-                            Text(
-                                url,
-                                fontSize = 10.sp, color = colors.onSurfaceVariant,
-                                fontFamily = FontFamily.Monospace, maxLines = 1,
-                            )
+                            Text("❌ $reason", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = colors.error)
+                            Text(url, fontSize = 10.sp, color = colors.onSurfaceVariant, fontFamily = FontFamily.Monospace, maxLines = 1)
                         }
                         if (failureList.size > 50) {
-                            Text(
-                                "+${failureList.size - 50} more",
-                                fontSize = 10.sp, color = colors.onSurfaceVariant,
-                            )
+                            Text("+${failureList.size - 50} more", fontSize = 10.sp, color = colors.onSurfaceVariant)
                         }
                     }
                 }
