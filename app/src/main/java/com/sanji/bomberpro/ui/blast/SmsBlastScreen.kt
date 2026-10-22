@@ -128,7 +128,6 @@ fun SmsBlastScreen(
     var reserved by remember { mutableStateOf(0) }
     var cancelFlag = remember { AtomicBoolean(false) }
 
-    // contact picker
     val contactPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -147,14 +146,9 @@ fun SmsBlastScreen(
                             if (idx >= 0) {
                                 val raw = cursor.getString(idx) ?: ""
                                 val cleaned = raw.trim()
-                                    .replace(" ", "")
-                                    .replace("-", "")
-                                    .replace("(", "")
-                                    .replace(")", "")
-                                    .replace(".", "")
-                                if (cleaned.length >= 7) {
-                                    number = cleaned
-                                }
+                                    .replace(" ", "").replace("-", "")
+                                    .replace("(", "").replace(")", "").replace(".", "")
+                                if (cleaned.length >= 7) number = cleaned
                             }
                         }
                     }
@@ -171,35 +165,26 @@ fun SmsBlastScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = {
-                if (step == BlastStep.PROGRESS) {
-                    cancelFlag.set(true)
-                } else if (step == BlastStep.RESULT) {
+                if (step == BlastStep.PROGRESS) cancelFlag.set(true)
+                else if (step == BlastStep.RESULT) {
                     step = BlastStep.NUMBER
                     number = ""
                     message = ""
                     countText = ""
                     errorMsg = null
-                } else {
-                    onBack()
-                }
+                } else onBack()
             }) {
                 Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
             }
             Spacer(Modifier.weight(1f))
-
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = colors.primary.copy(alpha = 0.15f),
-            ) {
+            Surface(shape = RoundedCornerShape(20.dp), color = colors.primary.copy(alpha = 0.15f)) {
                 Row(
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         "💰 $liveCredits",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colors.primary,
+                        fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.primary,
                     )
                 }
             }
@@ -207,22 +192,16 @@ fun SmsBlastScreen(
 
         Spacer(Modifier.height(12.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
-        ) {
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             when (step) {
                 BlastStep.NUMBER -> StepNumber(
                     number = number,
                     onChange = { number = it },
                     onOpenContacts = {
-                        val intent = Intent(
-                            Intent.ACTION_PICK,
-                            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                        )
                         try {
-                            contactPickerLauncher.launch(intent)
+                            contactPickerLauncher.launch(
+                                Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI)
+                            )
                         } catch (_: Exception) {
                             errorMsg = "Could not open contacts"
                         }
@@ -380,9 +359,6 @@ fun SmsBlastScreen(
     }
 }
 
-// ============================================================
-//  STEP 1 — Number
-// ============================================================
 @Composable
 private fun StepNumber(
     number: String,
@@ -393,20 +369,10 @@ private fun StepNumber(
     onNext: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
-    Text(
-        "Step 1 / 4 — Target Number",
-        fontSize = 18.sp,
-        fontWeight = FontWeight.Bold,
-        color = colors.onBackground,
-    )
+    Text("Step 1 / 4 — Target Number", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
     Spacer(Modifier.height(8.dp))
-    Text(
-        "Enter phone number with country code",
-        fontSize = 12.sp,
-        color = colors.onSurfaceVariant,
-    )
+    Text("Enter phone number with country code", fontSize = 12.sp, color = colors.onSurfaceVariant)
     Spacer(Modifier.height(20.dp))
-
     OutlinedTextField(
         value = number,
         onValueChange = onChange,
@@ -415,37 +381,22 @@ private fun StepNumber(
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
         modifier = Modifier.fillMaxWidth(),
     )
-
     Spacer(Modifier.height(10.dp))
-
     Surface(
         onClick = onOpenContacts,
         shape = RoundedCornerShape(12.dp),
         color = colors.surface,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Contacts, null, tint = colors.primary, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "Pick from contacts",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colors.onBackground,
-                )
-                Text(
-                    "Choose a number from your phone contacts",
-                    fontSize = 11.sp,
-                    color = colors.onSurfaceVariant,
-                )
+                Text("Pick from contacts", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+                Text("Choose a number from your phone contacts", fontSize = 11.sp, color = colors.onSurfaceVariant)
             }
         }
     }
-
     if (onOpenBulkMode != null) {
         Spacer(Modifier.height(10.dp))
         Surface(
@@ -454,10 +405,7 @@ private fun StepNumber(
             color = if (isPremium) colors.primary.copy(alpha = 0.12f) else colors.surface,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Row(
-                modifier = Modifier.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     if (isPremium) Icons.Default.CheckCircle else Icons.Default.Lock,
                     null,
@@ -468,28 +416,22 @@ private fun StepNumber(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         "Bulk Blast Mode",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                         color = if (isPremium) colors.onBackground else colors.onSurfaceVariant,
                     )
                     Text(
                         if (isPremium) "Send to multiple numbers at once"
                         else "Premium feature — upgrade to unlock",
-                        fontSize = 11.sp,
-                        color = colors.onSurfaceVariant,
+                        fontSize = 11.sp, color = colors.onSurfaceVariant,
                     )
                 }
             }
         }
     }
-
     Spacer(Modifier.height(24.dp))
     PrimaryButton("Next →", onNext, number.isNotBlank())
 }
 
-// ============================================================
-//  STEP 2 — Message
-// ============================================================
 @Composable
 private fun StepMessage(
     message: String,
@@ -519,9 +461,6 @@ private fun StepMessage(
     }
 }
 
-// ============================================================
-//  STEP 3 — Speed + Power
-// ============================================================
 @Composable
 private fun StepSpeedPower(
     speed: BlastSpeed,
@@ -534,9 +473,12 @@ private fun StepSpeedPower(
     onBack: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
-    Text("Step 3 / 4 — Speed & Power", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+    Text("Step 3 / 4 — Speed${if (isAdmin) " & Power" else ""}", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
     Spacer(Modifier.height(8.dp))
-    Text("Choose speed and power multiplier", fontSize = 12.sp, color = colors.onSurfaceVariant)
+    Text(
+        if (isAdmin) "Choose speed and power multiplier" else "Choose send speed",
+        fontSize = 12.sp, color = colors.onSurfaceVariant,
+    )
     Spacer(Modifier.height(20.dp))
 
     Text("SPEED", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.primary, letterSpacing = 1.sp)
@@ -557,8 +499,7 @@ private fun StepSpeedPower(
                             BlastSpeed.MEDIUM -> "Balanced · 50ms delay"
                             BlastSpeed.SLOW -> "Safe · 200ms delay"
                         },
-                        fontSize = 11.sp,
-                        color = colors.onSurfaceVariant,
+                        fontSize = 11.sp, color = colors.onSurfaceVariant,
                     )
                 }
                 if (speed == s) {
@@ -568,76 +509,61 @@ private fun StepSpeedPower(
         }
     }
 
-    Spacer(Modifier.height(20.dp))
-
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("POWER", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.primary, letterSpacing = 1.sp)
-        Spacer(Modifier.weight(1f))
-        Text(
-            "Count × $power",
-            fontSize = 11.sp,
-            color = colors.onSurfaceVariant,
-        )
-    }
-    Spacer(Modifier.height(6.dp))
-    Text(
-        "Higher power = more SMS from same count",
-        fontSize = 11.sp,
-        color = colors.onSurfaceVariant,
-    )
-    Spacer(Modifier.height(8.dp))
-
-    FirebaseConfig.ALLOWED_POWER_MODES.chunked(3).forEach { rowModes ->
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            rowModes.forEach { mode ->
-                Surface(
-                    onClick = { onPowerChange(mode) },
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (power == mode) colors.primary.copy(alpha = 0.2f) else colors.surface,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(
-                            "${mode}x",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Black,
-                            color = if (power == mode) colors.primary else colors.onBackground,
-                        )
-                        Text(
-                            when (mode) {
-                                2 -> "Default"
-                                3 -> "Fast"
-                                4 -> "Aggressive"
-                                5 -> "Heavy"
-                                10 -> "Max"
-                                else -> ""
-                            },
-                            fontSize = 9.sp,
-                            color = colors.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-            repeat(3 - rowModes.size) {
-                Spacer(Modifier.weight(1f))
-            }
+    if (isAdmin) {
+        Spacer(Modifier.height(20.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("POWER", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.primary, letterSpacing = 1.sp)
+            Spacer(Modifier.weight(1f))
+            Text("Count × $power", fontSize = 11.sp, color = colors.onSurfaceVariant)
         }
         Spacer(Modifier.height(6.dp))
+        Text(
+            "Higher power = more SMS from same count (admin only)",
+            fontSize = 11.sp, color = colors.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+
+        FirebaseConfig.ALLOWED_POWER_MODES.chunked(3).forEach { rowModes ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                rowModes.forEach { mode ->
+                    Surface(
+                        onClick = { onPowerChange(mode) },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (power == mode) colors.primary.copy(alpha = 0.2f) else colors.surface,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                "${mode}x",
+                                fontSize = 18.sp, fontWeight = FontWeight.Black,
+                                color = if (power == mode) colors.primary else colors.onBackground,
+                            )
+                            Text(
+                                when (mode) {
+                                    2 -> "Default"
+                                    3 -> "Fast"
+                                    4 -> "Aggressive"
+                                    5 -> "Heavy"
+                                    10 -> "Max"
+                                    else -> ""
+                                },
+                                fontSize = 9.sp, color = colors.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                repeat(3 - rowModes.size) { Spacer(Modifier.weight(1f)) }
+            }
+            Spacer(Modifier.height(6.dp))
+        }
     }
 
     if (!isAdmin) {
         Spacer(Modifier.height(12.dp))
-        Text(
-            "💰 Credits: $credits",
-            fontSize = 12.sp,
-            color = colors.onSurfaceVariant,
-        )
+        Text("💰 Credits: $credits", fontSize = 12.sp, color = colors.onSurfaceVariant)
     }
 
     Spacer(Modifier.height(24.dp))
@@ -648,9 +574,6 @@ private fun StepSpeedPower(
     }
 }
 
-// ============================================================
-//  STEP 4 — Count
-// ============================================================
 @Composable
 private fun StepCount(
     countText: String,
@@ -671,9 +594,8 @@ private fun StepCount(
     Text("Step 4 / 4 — Count", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
     Spacer(Modifier.height(8.dp))
     Text(
-        "Base count per target (power multiplies it)",
-        fontSize = 12.sp,
-        color = colors.onSurfaceVariant,
+        if (isAdmin) "Base count per target (power multiplies it)" else "How many SMS to send",
+        fontSize = 12.sp, color = colors.onSurfaceVariant,
     )
     Spacer(Modifier.height(16.dp))
 
@@ -681,23 +603,14 @@ private fun StepCount(
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("Online devices", fontSize = 12.sp, color = colors.onSurfaceVariant)
-                Text(
-                    "$devicesCount",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.primary,
-                )
+                Text("$devicesCount", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.primary)
             }
             if (scanning) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
-                    color = colors.primary,
+                    modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = colors.primary,
                 )
             } else {
-                TextButton(onClick = onScan) {
-                    Text("Scan", color = colors.primary)
-                }
+                TextButton(onClick = onScan) { Text("Scan", color = colors.primary) }
             }
         }
     }
@@ -705,26 +618,18 @@ private fun StepCount(
     Spacer(Modifier.height(12.dp))
 
     if (!isAdmin) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Credits: $credits", fontSize = 12.sp, color = colors.onSurfaceVariant)
             if (effective > 0) {
                 Text(
                     "Cost: $effective",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                     color = if (effective > credits) colors.error else colors.primary,
                 )
             }
         }
         Spacer(Modifier.height(4.dp))
-        Text(
-            "Failed sends are refunded automatically.",
-            fontSize = 11.sp,
-            color = colors.primary,
-        )
+        Text("Failed sends are refunded automatically.", fontSize = 11.sp, color = colors.primary)
         Spacer(Modifier.height(12.dp))
     }
 
@@ -737,13 +642,11 @@ private fun StepCount(
         modifier = Modifier.fillMaxWidth(),
     )
 
-    if (effective > 0) {
+    if (isAdmin && effective > 0) {
         Spacer(Modifier.height(8.dp))
         Text(
             "$baseCount × $power = $effective total SMS",
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = colors.onBackground,
+            fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
         )
     }
 
@@ -755,9 +658,6 @@ private fun StepCount(
     }
 }
 
-// ============================================================
-//  PROGRESS
-// ============================================================
 @Composable
 private fun StepProgress(
     sent: Int,
@@ -772,23 +672,17 @@ private fun StepProgress(
     val colors = LocalSanjiColors.current
     val progress = if (total > 0) (sent + failed).toFloat() / total else 0f
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("BLASTING…", fontSize = 20.sp, fontWeight = FontWeight.Black, color = colors.primary)
         Spacer(Modifier.height(4.dp))
         Text(
-            "Power ${power}x · Reserved $reserved",
-            fontSize = 11.sp,
-            color = colors.onSurfaceVariant,
+            if (isAdmin) "Power ${power}x · Reserved $reserved" else "Reserved $reserved credits",
+            fontSize = 11.sp, color = colors.onSurfaceVariant,
         )
         Spacer(Modifier.height(20.dp))
 
         LinearProgressIndicator(
-            progress = { progress },
-            color = colors.primary,
-            trackColor = colors.surface,
+            progress = { progress }, color = colors.primary, trackColor = colors.surface,
             modifier = Modifier.fillMaxWidth().height(10.dp),
         )
         Spacer(Modifier.height(8.dp))
@@ -818,9 +712,6 @@ private fun StepProgress(
     }
 }
 
-// ============================================================
-//  RESULT
-// ============================================================
 @Composable
 private fun StepResult(
     sent: Int,
@@ -863,21 +754,17 @@ private fun StepResult(
 
         if (!isAdmin) {
             Spacer(Modifier.height(20.dp))
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = colors.surface,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
+            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp)) {
                     if (refunded > 0) {
                         Text(
-                            text = "♻️ Refunded $refunded credits (failed sends)",
+                            "♻️ Refunded $refunded credits (failed sends)",
                             fontSize = 13.sp, color = colors.success, fontWeight = FontWeight.SemiBold,
                         )
                         Spacer(Modifier.height(4.dp))
                     }
                     Text(
-                        text = "💰 Final balance: $finalBalance credits",
+                        "💰 Final balance: $finalBalance credits",
                         fontSize = 13.sp, color = colors.onBackground, fontWeight = FontWeight.SemiBold,
                     )
                 }
@@ -889,9 +776,6 @@ private fun StepResult(
     }
 }
 
-// ============================================================
-//  SHARED
-// ============================================================
 @Composable
 private fun StatBlock(label: String, value: String, color: Color) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
