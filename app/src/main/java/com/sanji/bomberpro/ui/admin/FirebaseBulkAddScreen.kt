@@ -1,13 +1,10 @@
 package com.sanji.bomberpro.ui.admin
 
 import android.content.ContentValues
-import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,6 +45,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -77,6 +75,9 @@ fun FirebaseBulkAddScreen(
     adminUid: String,
     onBack: () -> Unit,
     onCompleted: () -> Unit,
+    onPickFiles: () -> Unit,
+    pendingFileUris: List<Uri>?,
+    onConsumed: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
     val scope = rememberCoroutineScope()
@@ -109,37 +110,38 @@ fun FirebaseBulkAddScreen(
 
     val cancelFlag = remember { AtomicBoolean(false) }
 
-    // safe single-file picker (GetContent is universally supported)
-    val filePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            phase = BulkPhase.EXTRACTING
-            error = null
-            extracted.clear()
-            selected.clear()
-            try {
-                val read = service.readUriText(uri, context.contentResolver)
+    // consume pending file URIs from parent (multi-file supported)
+    LaunchedEffect(pendingFileUris) {
+        val uris = pendingFileUris
+        if (uris.isNullOrEmpty()) return@LaunchedEffect
+        onConsumed()
+        phase = BulkPhase.EXTRACTING
+        error = null
+        extracted.clear()
+        selected.clear()
+        try {
+            val allUrls = mutableListOf<String>()
+            for (u in uris) {
+                val read = service.readUriText(u, context.contentResolver)
                 if (read.isFailure) {
                     error = "Read failed: ${read.exceptionOrNull()?.message}"
-                    phase = BulkPhase.IDLE
-                    return@launch
+                    continue
                 }
                 val urls = service.extractUrls(read.getOrNull() ?: "")
-                val unique = urls.toSet().toList()
-                if (unique.isEmpty()) {
-                    error = "No URLs found in file"
-                    phase = BulkPhase.IDLE
-                    return@launch
-                }
-                extracted.addAll(unique)
-                selected.addAll(unique.map { true })
-                phase = BulkPhase.PREVIEW
-            } catch (e: Exception) {
-                error = "Extract failed: ${e.message}"
-                phase = BulkPhase.IDLE
+                allUrls.addAll(urls)
             }
+            val unique = allUrls.toSet().toList()
+            if (unique.isEmpty()) {
+                error = "No URLs found in selected file(s)"
+                phase = BulkPhase.IDLE
+                return@LaunchedEffect
+            }
+            extracted.addAll(unique)
+            selected.addAll(unique.map { true })
+            phase = BulkPhase.PREVIEW
+        } catch (e: Exception) {
+            error = "Extract failed: ${e.message}"
+            phase = BulkPhase.IDLE
         }
     }
 
@@ -291,13 +293,9 @@ fun FirebaseBulkAddScreen(
                                 Surface(
                                     onClick = {
                                         try {
-                                            filePicker.launch("text/*")
+                                            onPickFiles()
                                         } catch (e: Exception) {
-                                            try {
-                                                filePicker.launch("*/*")
-                                            } catch (e2: Exception) {
-                                                error = "File picker not available. Use Paste."
-                                            }
+                                            error = "File picker unavailable: ${e.message}"
                                         }
                                     },
                                     shape = RoundedCornerShape(14.dp),
@@ -311,8 +309,8 @@ fun FirebaseBulkAddScreen(
                                         Icon(Icons.Default.UploadFile, null, tint = colors.primary, modifier = Modifier.size(28.dp))
                                         Spacer(Modifier.width(12.dp))
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Text("Select File", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
-                                            Text("Pick a text file with URLs", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                                            Text("Select Files", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                                            Text("Pick one or more files — multi-select supported", fontSize = 11.sp, color = colors.onSurfaceVariant)
                                         }
                                     }
                                 }
@@ -331,8 +329,8 @@ fun FirebaseBulkAddScreen(
                                         Icon(Icons.Default.ContentPaste, null, tint = colors.primary, modifier = Modifier.size(28.dp))
                                         Spacer(Modifier.width(12.dp))
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Text("Paste Text", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
-                                            Text("Open paste dialog", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                                            Text("Paste URLs", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                                            Text("Paste many URLs at once", fontSize = 11.sp, color = colors.onSurfaceVariant)
                                         }
                                     }
                                 }
