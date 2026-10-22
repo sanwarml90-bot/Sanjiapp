@@ -12,13 +12,15 @@ import androidx.navigation.compose.rememberNavController
 import com.sanji.bomberpro.data.AuthManager
 import com.sanji.bomberpro.data.AuthState
 import com.sanji.bomberpro.navigation.SanjiNavGraph
+import com.sanji.bomberpro.services.GiveawayTicker
 import com.sanji.bomberpro.services.SchedulerTicker
 import com.sanji.bomberpro.theme.SanjiTheme
 import com.sanji.bomberpro.theme.ThemeManager
 
 class MainActivity : ComponentActivity() {
 
-    private var ticker: SchedulerTicker? = null
+    private var schedulerTicker: SchedulerTicker? = null
+    private var giveawayTicker: GiveawayTicker? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,11 +37,15 @@ class MainActivity : ComponentActivity() {
             SanjiTheme(theme = currentTheme) {
                 val navController = rememberNavController()
                 val tickerScope = rememberCoroutineScope()
-                val tickerInstance = remember { SchedulerTicker(tickerScope) }
+
+                val schedTicker = remember { SchedulerTicker(tickerScope) }
+                val gwTicker = remember { GiveawayTicker(tickerScope) }
 
                 LaunchedEffect(Unit) {
-                    ticker = tickerInstance
-                    tickerInstance.start()
+                    schedulerTicker = schedTicker
+                    giveawayTicker = gwTicker
+                    schedTicker.start()
+                    gwTicker.start()
                 }
 
                 SanjiNavGraph(
@@ -54,7 +60,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        ticker?.stop()
-        ticker = null
+        schedulerTicker?.stop()
+        schedulerTicker = null
+        giveawayTicker?.stop()
+        giveawayTicker = null
     }
 }
