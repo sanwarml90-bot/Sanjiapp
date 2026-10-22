@@ -60,7 +60,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class AdminView {
-    HOME, FIREBASE, USERS, USER_DETAIL, ROLES,
+    HOME, FIREBASE, FIREBASE_BULK, USERS, USER_DETAIL, ROLES,
     SETTINGS, BROADCAST, REDEEM, PRICING,
     LOGS, ANALYTICS,
 }
@@ -93,7 +93,6 @@ fun AdminScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf<String?>(null) }
 
-    // bulk add / deduct dialogs
     var showBulkAdd by remember { mutableStateOf(false) }
     var showBulkDeduct by remember { mutableStateOf(false) }
 
@@ -105,7 +104,6 @@ fun AdminScreen(
         }
     }
 
-    // load users on query change (debounced)
     LaunchedEffect(userQuery) {
         delay(350)
         loadingUsers = true
@@ -113,24 +111,18 @@ fun AdminScreen(
         loadingUsers = false
     }
 
-    // cancel error/success after a while
     LaunchedEffect(error) {
-        if (error != null) {
-            delay(4000)
-            error = null
-        }
+        if (error != null) { delay(4000); error = null }
     }
     LaunchedEffect(success) {
-        if (success != null) {
-            delay(4000)
-            success = null
-        }
+        if (success != null) { delay(4000); success = null }
     }
 
     when (view) {
         AdminView.HOME -> AdminHomeMenu(
             isOwner = isOwner,
             onOpenFirebase = { loadFirebases(); view = AdminView.FIREBASE },
+            onOpenFirebaseBulk = { view = AdminView.FIREBASE_BULK },
             onOpenUsers = { view = AdminView.USERS },
             onOpenRoles = { view = AdminView.ROLES },
             onOpenSettings = { view = AdminView.SETTINGS },
@@ -142,6 +134,12 @@ fun AdminScreen(
             onOpenBulkAdd = { showBulkAdd = true },
             onOpenBulkDeduct = { showBulkDeduct = true },
             onExit = onExit,
+        )
+
+        AdminView.FIREBASE_BULK -> FirebaseBulkAddScreen(
+            adminUid = adminUid,
+            onBack = { view = AdminView.HOME },
+            onCompleted = { loadFirebases() },
         )
 
         AdminView.FIREBASE -> Column(
@@ -417,7 +415,6 @@ fun AdminScreen(
         AdminView.ANALYTICS -> AnalyticsScreen(onBack = { view = AdminView.HOME })
     }
 
-    // global dialogs
     if (showBulkAdd) {
         BulkAmountDialog(
             title = "Add credits to ALL users",
@@ -455,7 +452,6 @@ fun AdminScreen(
         )
     }
 
-    // toast layer
     if (error != null || success != null) {
         Box(
             modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -480,6 +476,7 @@ fun AdminScreen(
 private fun AdminHomeMenu(
     isOwner: Boolean,
     onOpenFirebase: () -> Unit,
+    onOpenFirebaseBulk: () -> Unit,
     onOpenUsers: () -> Unit,
     onOpenRoles: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -514,6 +511,7 @@ private fun AdminHomeMenu(
         Spacer(Modifier.height(16.dp))
 
         AdminMenuCard("🔥", "Manage Firebases", "Add / remove / enable realtime DB nodes", onOpenFirebase)
+        AdminMenuCard("📁", "Bulk Add Firebases", "Import from file or paste — validates URLs", onOpenFirebaseBulk)
         AdminMenuCard("👥", "Users", "Search, view, credits, ban, limits, notes, tags, subscription", onOpenUsers)
         if (isOwner) {
             AdminMenuCard("🔱", "Roles & Admins", "Add/remove super admins and admins · transfer ownership", onOpenRoles)
@@ -531,7 +529,7 @@ private fun AdminHomeMenu(
 
         Spacer(Modifier.height(24.dp))
         Text(
-            "Giveaways · Support tickets · Appeals coming in next updates",
+            "Support tickets · Appeals coming in next update",
             fontSize = 10.sp, color = colors.onSurfaceVariant,
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
         )
