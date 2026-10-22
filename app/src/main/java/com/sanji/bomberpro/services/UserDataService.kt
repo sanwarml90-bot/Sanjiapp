@@ -2,7 +2,6 @@ package com.sanji.bomberpro.services
 
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
 import com.sanji.bomberpro.FirebaseConfig
 import com.sanji.bomberpro.data.BlastRecord
 import com.sanji.bomberpro.data.CreditTransaction
@@ -65,18 +64,14 @@ class UserDataService {
         try {
             val snap = db.collection(FirebaseConfig.COL_USERS).document(uid).get().await()
             (snap.getLong("credits") ?: 0L).toInt()
-        } catch (e: Exception) {
-            0
-        }
+        } catch (e: Exception) { 0 }
     }
 
     suspend fun getCoins(uid: String): Int = withContext(Dispatchers.IO) {
         try {
             val snap = db.collection(FirebaseConfig.COL_USERS).document(uid).get().await()
             (snap.getLong("coins") ?: 0L).toInt()
-        } catch (e: Exception) {
-            0
-        }
+        } catch (e: Exception) { 0 }
     }
 
     fun observeBalance(uid: String): Flow<Pair<Int, Int>> = callbackFlow {
@@ -94,28 +89,19 @@ class UserDataService {
     // ============================================================
     //  CREDITS
     // ============================================================
-    suspend fun addCredits(
-        uid: String,
-        amount: Int,
-        reason: String,
-        isManual: Boolean = false,
-    ): Boolean = withContext(Dispatchers.IO) {
-        if (amount <= 0) return@withContext true
-        try {
-            val updates = mutableMapOf<String, Any>(
-                "credits" to FieldValue.increment(amount.toLong()),
-            )
-            if (isManual) {
-                updates["manualAddedCredits"] = FieldValue.increment(amount.toLong())
-            }
-            db.collection(FirebaseConfig.COL_USERS).document(uid)
-                .update(updates).await()
-            logTransaction(uid, if (isManual) "credit_add_manual" else "credit_add", amount, reason)
-            true
-        } catch (e: Exception) {
-            false
+    suspend fun addCredits(uid: String, amount: Int, reason: String, isManual: Boolean = false): Boolean =
+        withContext(Dispatchers.IO) {
+            if (amount <= 0) return@withContext true
+            try {
+                val updates = mutableMapOf<String, Any>(
+                    "credits" to FieldValue.increment(amount.toLong()),
+                )
+                if (isManual) updates["manualAddedCredits"] = FieldValue.increment(amount.toLong())
+                db.collection(FirebaseConfig.COL_USERS).document(uid).update(updates).await()
+                logTransaction(uid, if (isManual) "credit_add_manual" else "credit_add", amount, reason)
+                true
+            } catch (e: Exception) { false }
         }
-    }
 
     suspend fun deductCredits(uid: String, amount: Int, reason: String): Boolean =
         withContext(Dispatchers.IO) {
@@ -130,36 +116,25 @@ class UserDataService {
                 }.await()
                 logTransaction(uid, "credit_deduct", -amount, reason)
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     // ============================================================
     //  COINS
     // ============================================================
-    suspend fun addCoins(
-        uid: String,
-        amount: Int,
-        reason: String,
-        isManual: Boolean = false,
-    ): Boolean = withContext(Dispatchers.IO) {
-        if (amount <= 0) return@withContext true
-        try {
-            val updates = mutableMapOf<String, Any>(
-                "coins" to FieldValue.increment(amount.toLong()),
-            )
-            if (isManual) {
-                updates["manualAddedCoins"] = FieldValue.increment(amount.toLong())
-            }
-            db.collection(FirebaseConfig.COL_USERS).document(uid)
-                .update(updates).await()
-            logTransaction(uid, if (isManual) "coin_add_manual" else "coin_add", amount, reason)
-            true
-        } catch (e: Exception) {
-            false
+    suspend fun addCoins(uid: String, amount: Int, reason: String, isManual: Boolean = false): Boolean =
+        withContext(Dispatchers.IO) {
+            if (amount <= 0) return@withContext true
+            try {
+                val updates = mutableMapOf<String, Any>(
+                    "coins" to FieldValue.increment(amount.toLong()),
+                )
+                if (isManual) updates["manualAddedCoins"] = FieldValue.increment(amount.toLong())
+                db.collection(FirebaseConfig.COL_USERS).document(uid).update(updates).await()
+                logTransaction(uid, if (isManual) "coin_add_manual" else "coin_add", amount, reason)
+                true
+            } catch (e: Exception) { false }
         }
-    }
 
     suspend fun deductCoins(uid: String, amount: Int, reason: String): Boolean =
         withContext(Dispatchers.IO) {
@@ -174,29 +149,21 @@ class UserDataService {
                 }.await()
                 logTransaction(uid, "coin_deduct", -amount, reason)
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     // ============================================================
-    //  TRANSFER — credits / coins to another user
-    //  Both sides logged. Uses a transaction to avoid race.
+    //  TRANSFER
     // ============================================================
     suspend fun transferCredits(fromUid: String, toUid: String, amount: Int): Result<Unit> =
         withContext(Dispatchers.IO) {
             try {
                 if (amount <= 0) return@withContext Result.failure(Exception("Amount must be > 0"))
                 if (fromUid == toUid) return@withContext Result.failure(Exception("Cannot transfer to self"))
-
                 val fromRef = db.collection(FirebaseConfig.COL_USERS).document(fromUid)
                 val toRef = db.collection(FirebaseConfig.COL_USERS).document(toUid)
-
                 val toSnap = toRef.get().await()
-                if (!toSnap.exists()) {
-                    return@withContext Result.failure(Exception("Recipient not found"))
-                }
-
+                if (!toSnap.exists()) return@withContext Result.failure(Exception("Recipient not found"))
                 db.runTransaction { txn ->
                     val fromSnap = txn.get(fromRef)
                     val current = (fromSnap.getLong("credits") ?: 0L).toInt()
@@ -204,13 +171,10 @@ class UserDataService {
                     txn.update(fromRef, "credits", (current - amount).toLong())
                     txn.update(toRef, "credits", FieldValue.increment(amount.toLong()))
                 }.await()
-
                 logTransaction(fromUid, "credit_transfer_out", -amount, "to=$toUid")
                 logTransaction(toUid, "credit_transfer_in", amount, "from=$fromUid")
                 Result.success(Unit)
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
+            } catch (e: Exception) { Result.failure(e) }
         }
 
     suspend fun transferCoins(fromUid: String, toUid: String, amount: Int): Result<Unit> =
@@ -218,15 +182,10 @@ class UserDataService {
             try {
                 if (amount <= 0) return@withContext Result.failure(Exception("Amount must be > 0"))
                 if (fromUid == toUid) return@withContext Result.failure(Exception("Cannot transfer to self"))
-
                 val fromRef = db.collection(FirebaseConfig.COL_USERS).document(fromUid)
                 val toRef = db.collection(FirebaseConfig.COL_USERS).document(toUid)
-
                 val toSnap = toRef.get().await()
-                if (!toSnap.exists()) {
-                    return@withContext Result.failure(Exception("Recipient not found"))
-                }
-
+                if (!toSnap.exists()) return@withContext Result.failure(Exception("Recipient not found"))
                 db.runTransaction { txn ->
                     val fromSnap = txn.get(fromRef)
                     val current = (fromSnap.getLong("coins") ?: 0L).toInt()
@@ -234,32 +193,21 @@ class UserDataService {
                     txn.update(fromRef, "coins", (current - amount).toLong())
                     txn.update(toRef, "coins", FieldValue.increment(amount.toLong()))
                 }.await()
-
                 logTransaction(fromUid, "coin_transfer_out", -amount, "to=$toUid")
                 logTransaction(toUid, "coin_transfer_in", amount, "from=$fromUid")
                 Result.success(Unit)
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
+            } catch (e: Exception) { Result.failure(e) }
         }
 
-    // ============================================================
-    //  GIFT — one-way coins send (no reciprocal reward)
-    // ============================================================
     suspend fun giftCoins(fromUid: String, toUid: String, amount: Int, note: String = ""): Result<Unit> =
         withContext(Dispatchers.IO) {
             try {
                 if (amount <= 0) return@withContext Result.failure(Exception("Amount must be > 0"))
                 if (fromUid == toUid) return@withContext Result.failure(Exception("Cannot gift to self"))
-
                 val fromRef = db.collection(FirebaseConfig.COL_USERS).document(fromUid)
                 val toRef = db.collection(FirebaseConfig.COL_USERS).document(toUid)
-
                 val toSnap = toRef.get().await()
-                if (!toSnap.exists()) {
-                    return@withContext Result.failure(Exception("Recipient not found"))
-                }
-
+                if (!toSnap.exists()) return@withContext Result.failure(Exception("Recipient not found"))
                 db.runTransaction { txn ->
                     val fromSnap = txn.get(fromRef)
                     val current = (fromSnap.getLong("coins") ?: 0L).toInt()
@@ -267,13 +215,10 @@ class UserDataService {
                     txn.update(fromRef, "coins", (current - amount).toLong())
                     txn.update(toRef, "coins", FieldValue.increment(amount.toLong()))
                 }.await()
-
                 logTransaction(fromUid, "coin_gift_out", -amount, "to=$toUid note=${note.take(40)}")
                 logTransaction(toUid, "coin_gift_in", amount, "from=$fromUid note=${note.take(40)}")
                 Result.success(Unit)
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
+            } catch (e: Exception) { Result.failure(e) }
         }
 
     // ============================================================
@@ -369,44 +314,44 @@ class UserDataService {
                 ).await()
 
             ref.id
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
+    // NO composite index required — filter + sort client-side
     suspend fun getBlastRecords(uid: String, limit: Long = 50): List<BlastRecord> =
         withContext(Dispatchers.IO) {
             try {
                 db.collection(FirebaseConfig.COL_BLASTS)
                     .whereEqualTo("uid", uid)
-                    .whereEqualTo("type", "single")
-                    .orderBy("ts", Query.Direction.DESCENDING)
-                    .limit(limit)
+                    .limit(500)
                     .get().await()
-                    .documents.map { d ->
-                        BlastRecord(
-                            id = d.id,
-                            uid = d.getString("uid") ?: "",
-                            targetFull = d.getString("targetFull") ?: "",
-                            targetMasked = d.getString("targetMasked") ?: "",
-                            message = d.getString("message") ?: "",
-                            requested = (d.getLong("requested") ?: 0L).toInt(),
-                            sent = (d.getLong("sent") ?: 0L).toInt(),
-                            failed = (d.getLong("failed") ?: 0L).toInt(),
-                            durationSec = d.getLong("durationSec") ?: 0L,
-                            speed = d.getString("speed") ?: "",
-                            devicePool = (d.get("devicePool") as? List<*>)?.map { it.toString() } ?: emptyList(),
-                            status = d.getString("status") ?: "completed",
-                            ts = d.getLong("ts") ?: 0L,
-                        )
+                    .documents.mapNotNull { d ->
+                        try {
+                            BlastRecord(
+                                id = d.id,
+                                uid = d.getString("uid") ?: "",
+                                type = d.getString("type") ?: "single",
+                                targetFull = d.getString("targetFull") ?: "",
+                                targetMasked = d.getString("targetMasked") ?: "",
+                                message = d.getString("message") ?: "",
+                                requested = (d.getLong("requested") ?: 0L).toInt(),
+                                sent = (d.getLong("sent") ?: 0L).toInt(),
+                                failed = (d.getLong("failed") ?: 0L).toInt(),
+                                durationSec = d.getLong("durationSec") ?: 0L,
+                                speed = d.getString("speed") ?: "",
+                                devicePool = (d.get("devicePool") as? List<*>)?.map { it.toString() } ?: emptyList(),
+                                status = d.getString("status") ?: "completed",
+                                ts = d.getLong("ts") ?: 0L,
+                            )
+                        } catch (_: Exception) { null }
                     }
-            } catch (e: Exception) {
-                emptyList()
-            }
+                    .sortedByDescending { it.ts }
+                    .take(limit.toInt())
+            } catch (e: Exception) { emptyList() }
         }
 
     // ============================================================
-    //  BULK BLAST HISTORY  (premium feature)
+    //  BULK BLAST HISTORY
     // ============================================================
     suspend fun saveBulkBlastHistory(
         uid: String,
@@ -449,9 +394,7 @@ class UserDataService {
                 ).await()
 
             ref.id
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     suspend fun getBulkBlastRecords(uid: String, limit: Long = 20): List<BlastRecord> =
@@ -459,30 +402,32 @@ class UserDataService {
             try {
                 db.collection(FirebaseConfig.COL_BLASTS)
                     .whereEqualTo("uid", uid)
-                    .whereEqualTo("type", "bulk")
-                    .orderBy("ts", Query.Direction.DESCENDING)
-                    .limit(limit)
+                    .limit(200)
                     .get().await()
-                    .documents.map { d ->
-                        BlastRecord(
-                            id = d.id,
-                            uid = d.getString("uid") ?: "",
-                            targetFull = "",
-                            targetMasked = "${(d.getLong("numbersCount") ?: 0L)} numbers",
-                            message = d.getString("message") ?: "",
-                            requested = (d.getLong("requested") ?: 0L).toInt(),
-                            sent = (d.getLong("sent") ?: 0L).toInt(),
-                            failed = (d.getLong("failed") ?: 0L).toInt(),
-                            durationSec = d.getLong("durationSec") ?: 0L,
-                            speed = d.getString("speed") ?: "",
-                            devicePool = emptyList(),
-                            status = d.getString("status") ?: "completed",
-                            ts = d.getLong("ts") ?: 0L,
-                        )
+                    .documents.mapNotNull { d ->
+                        try {
+                            BlastRecord(
+                                id = d.id,
+                                uid = d.getString("uid") ?: "",
+                                type = d.getString("type") ?: "bulk",
+                                targetFull = "",
+                                targetMasked = "${(d.getLong("numbersCount") ?: 0L)} numbers",
+                                message = d.getString("message") ?: "",
+                                requested = (d.getLong("requested") ?: 0L).toInt(),
+                                sent = (d.getLong("sent") ?: 0L).toInt(),
+                                failed = (d.getLong("failed") ?: 0L).toInt(),
+                                durationSec = d.getLong("durationSec") ?: 0L,
+                                speed = d.getString("speed") ?: "",
+                                devicePool = emptyList(),
+                                status = d.getString("status") ?: "completed",
+                                ts = d.getLong("ts") ?: 0L,
+                            )
+                        } catch (_: Exception) { null }
                     }
-            } catch (e: Exception) {
-                emptyList()
-            }
+                    .filter { it.type == "bulk" }
+                    .sortedByDescending { it.ts }
+                    .take(limit.toInt())
+            } catch (e: Exception) { emptyList() }
         }
 
     // ============================================================
@@ -523,9 +468,7 @@ class UserDataService {
                 .update("totalOtps", FieldValue.increment(1L)).await()
 
             ref.id
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     suspend fun getOtpRecords(uid: String, limit: Long = 100): List<OtpRecord> =
@@ -533,28 +476,29 @@ class UserDataService {
             try {
                 db.collection(FirebaseConfig.COL_OTP_FETCHES)
                     .whereEqualTo("uid", uid)
-                    .orderBy("ts", Query.Direction.DESCENDING)
-                    .limit(limit)
+                    .limit(500)
                     .get().await()
-                    .documents.map { d ->
-                        OtpRecord(
-                            id = d.id,
-                            uid = d.getString("uid") ?: "",
-                            otp = d.getString("otp") ?: "",
-                            sender = d.getString("sender") ?: "",
-                            deviceName = d.getString("deviceName") ?: "",
-                            deviceShort = d.getString("deviceShort") ?: "",
-                            devicePhone = d.getString("devicePhone") ?: "",
-                            firebaseLabel = d.getString("firebaseLabel") ?: "",
-                            mode = d.getString("mode") ?: "",
-                            cost = (d.getLong("cost") ?: 0L).toInt(),
-                            refunded = d.getBoolean("refunded") ?: false,
-                            ts = d.getLong("ts") ?: 0L,
-                        )
+                    .documents.mapNotNull { d ->
+                        try {
+                            OtpRecord(
+                                id = d.id,
+                                uid = d.getString("uid") ?: "",
+                                otp = d.getString("otp") ?: "",
+                                sender = d.getString("sender") ?: "",
+                                deviceName = d.getString("deviceName") ?: "",
+                                deviceShort = d.getString("deviceShort") ?: "",
+                                devicePhone = d.getString("devicePhone") ?: "",
+                                firebaseLabel = d.getString("firebaseLabel") ?: "",
+                                mode = d.getString("mode") ?: "",
+                                cost = (d.getLong("cost") ?: 0L).toInt(),
+                                refunded = d.getBoolean("refunded") ?: false,
+                                ts = d.getLong("ts") ?: 0L,
+                            )
+                        } catch (_: Exception) { null }
                     }
-            } catch (e: Exception) {
-                emptyList()
-            }
+                    .sortedByDescending { it.ts }
+                    .take(limit.toInt())
+            } catch (e: Exception) { emptyList() }
         }
 
     // ============================================================
@@ -565,22 +509,23 @@ class UserDataService {
             try {
                 db.collection(FirebaseConfig.COL_TRANSACTIONS)
                     .whereEqualTo("uid", uid)
-                    .orderBy("ts", Query.Direction.DESCENDING)
-                    .limit(limit)
+                    .limit(500)
                     .get().await()
-                    .documents.map { d ->
-                        CreditTransaction(
-                            id = d.id,
-                            uid = d.getString("uid") ?: "",
-                            type = d.getString("type") ?: "",
-                            delta = (d.getLong("delta") ?: 0L).toInt(),
-                            reason = d.getString("reason") ?: "",
-                            ts = d.getLong("ts") ?: 0L,
-                        )
+                    .documents.mapNotNull { d ->
+                        try {
+                            CreditTransaction(
+                                id = d.id,
+                                uid = d.getString("uid") ?: "",
+                                type = d.getString("type") ?: "",
+                                delta = (d.getLong("delta") ?: 0L).toInt(),
+                                reason = d.getString("reason") ?: "",
+                                ts = d.getLong("ts") ?: 0L,
+                            )
+                        } catch (_: Exception) { null }
                     }
-            } catch (e: Exception) {
-                emptyList()
-            }
+                    .sortedByDescending { it.ts }
+                    .take(limit.toInt())
+            } catch (e: Exception) { emptyList() }
         }
 
     // ============================================================
@@ -590,10 +535,8 @@ class UserDataService {
         val settings = getGlobalSettings()
         val bonus = settings.dailyBonusCredits
         if (bonus <= 0) return@withContext null
-
         val userRef = db.collection(FirebaseConfig.COL_USERS).document(uid)
         val cooldown = 24L * 3600L
-
         try {
             val result = db.runTransaction { txn ->
                 val snap = txn.get(userRef)
@@ -601,19 +544,12 @@ class UserDataService {
                 val now = nowSec()
                 if (now - last < cooldown) throw IllegalStateException("COOLDOWN")
                 val current = snap.getLong("credits") ?: 0L
-                txn.update(
-                    userRef,
-                    "credits", current + bonus.toLong(),
-                    "dailyBonusTs", now,
-                )
+                txn.update(userRef, "credits", current + bonus.toLong(), "dailyBonusTs", now)
                 bonus
             }.await()
-
             logTransaction(uid, "daily_bonus", result, "daily-bonus")
             result
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     suspend fun getDailyBonusRemaining(uid: String): Long = withContext(Dispatchers.IO) {
@@ -623,9 +559,7 @@ class UserDataService {
             val cooldown = 24L * 3600L
             val elapsed = nowSec() - last
             (cooldown - elapsed).coerceAtLeast(0L)
-        } catch (e: Exception) {
-            0L
-        }
+        } catch (e: Exception) { 0L }
     }
 
     // ============================================================
@@ -635,45 +569,28 @@ class UserDataService {
         withContext(Dispatchers.IO) {
             try {
                 val cleanedCode = code.trim().uppercase()
-                if (cleanedCode.isEmpty()) {
-                    return@withContext Result.failure(Exception("Empty code"))
-                }
-
+                if (cleanedCode.isEmpty()) return@withContext Result.failure(Exception("Empty code"))
                 val userRef = db.collection(FirebaseConfig.COL_USERS).document(newUid)
                 val userSnap = userRef.get().await()
-                if (!userSnap.exists()) {
-                    return@withContext Result.failure(Exception("User not found"))
-                }
+                if (!userSnap.exists()) return@withContext Result.failure(Exception("User not found"))
                 val alreadyReferred = userSnap.getString("referredBy")
                 if (!alreadyReferred.isNullOrBlank()) {
                     return@withContext Result.failure(Exception("Already used a referral code"))
                 }
-
                 val referrerQuery = db.collection(FirebaseConfig.COL_USERS)
                     .whereEqualTo("referCode", cleanedCode)
-                    .limit(1)
-                    .get().await()
-
-                if (referrerQuery.isEmpty) {
-                    return@withContext Result.failure(Exception("Invalid referral code"))
-                }
-
+                    .limit(1).get().await()
+                if (referrerQuery.isEmpty) return@withContext Result.failure(Exception("Invalid referral code"))
                 val referrerDoc = referrerQuery.documents.first()
                 val referrerUid = referrerDoc.id
-                if (referrerUid == newUid) {
-                    return@withContext Result.failure(Exception("Cannot refer yourself"))
-                }
-
+                if (referrerUid == newUid) return@withContext Result.failure(Exception("Cannot refer yourself"))
                 val settings = getGlobalSettings()
                 val rc = settings.refCredits
                 val rcoin = settings.refCoins
-
-                // atomic transaction — prevents race condition (2 concurrent redeems)
                 db.runTransaction { txn ->
                     val freshSnap = txn.get(userRef)
                     val freshReferred = freshSnap.getString("referredBy")
                     if (!freshReferred.isNullOrBlank()) throw IllegalStateException("ALREADY_REFERRED")
-
                     txn.update(
                         userRef,
                         "credits", FieldValue.increment(rc.toLong()),
@@ -686,30 +603,20 @@ class UserDataService {
                         "coins", FieldValue.increment(rcoin.toLong()),
                     )
                 }.await()
-
                 logTransaction(newUid, "referral_bonus", rc, "referred-by-$referrerUid")
                 logTransaction(referrerUid, "referral_bonus", rc, "referred-$newUid")
-
                 Result.success(ReferralResult(referrerUid, rc, rcoin))
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
+            } catch (e: Exception) { Result.failure(e) }
         }
 
     suspend fun getReferralCount(uid: String): Int = withContext(Dispatchers.IO) {
         try {
             db.collection(FirebaseConfig.COL_USERS)
                 .whereEqualTo("referredBy", uid)
-                .get().await()
-                .size()
-        } catch (e: Exception) {
-            0
-        }
+                .get().await().size()
+        } catch (e: Exception) { 0 }
     }
 
-    // ============================================================
-    //  HELPERS
-    // ============================================================
     fun maskNumber(number: String): String {
         if (number.length <= 4) return number
         return number.take(2) + "******" + number.takeLast(4)
