@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -40,15 +39,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.firebase.firestore.FirebaseFirestore
+import com.sanji.bomberpro.FirebaseConfig
 import com.sanji.bomberpro.data.Giveaway
 import com.sanji.bomberpro.data.LeaderboardRow
 import com.sanji.bomberpro.services.GiveawayService
 import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -89,16 +90,10 @@ fun GiveawayDetailScreen(
     LaunchedEffect(gwId) { refresh() }
 
     LaunchedEffect(error) {
-        if (error != null) {
-            kotlinx.coroutines.delay(4000)
-            error = null
-        }
+        if (error != null) { kotlinx.coroutines.delay(4000); error = null }
     }
     LaunchedEffect(success) {
-        if (success != null) {
-            kotlinx.coroutines.delay(4000)
-            success = null
-        }
+        if (success != null) { kotlinx.coroutines.delay(4000); success = null }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(colors.background)) {
@@ -135,49 +130,33 @@ fun GiveawayDetailScreen(
             Column(
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
             ) {
-                // header
                 Surface(shape = RoundedCornerShape(16.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
-                        Text(
-                            if (isEnded) "🏁" else "🎁",
-                            fontSize = 40.sp,
-                        )
+                        Text(if (isEnded) "🏁" else "🎁", fontSize = 40.sp)
                         Spacer(Modifier.height(8.dp))
                         Text(
                             g.title,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Black,
-                            color = colors.onBackground,
+                            fontSize = 20.sp, fontWeight = FontWeight.Black, color = colors.onBackground,
                         )
                         Spacer(Modifier.height(6.dp))
-                        Text(
-                            "🏆 ${g.prize}",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colors.primary,
-                        )
+                        Text("🏆 ${g.prize}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.primary)
                         if (g.description.isNotBlank()) {
                             Spacer(Modifier.height(8.dp))
-                            Text(
-                                g.description,
-                                fontSize = 12.sp,
-                                color = colors.onSurfaceVariant,
-                            )
+                            Text(g.description, fontSize = 12.sp, color = colors.onSurfaceVariant)
                         }
                     }
                 }
 
                 Spacer(Modifier.height(12.dp))
 
-                // stats card
                 Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp)) {
-                        InfoRow("Status", if (isEnded) "Ended" else if (isExpired) "Expired" else "Active")
-                        InfoRow("Ends", fmt(g.endsAt))
-                        if (isEnded) InfoRow("Ended", fmt(g.endedAt))
-                        InfoRow("Participants", "${g.entries.size}")
-                        InfoRow("Winners", "${g.winnersCount}")
-                        InfoRow(
+                        DetailInfoRow("Status", if (isEnded) "Ended" else if (isExpired) "Expired" else "Active")
+                        DetailInfoRow("Ends", fmt(g.endsAt))
+                        if (isEnded) DetailInfoRow("Ended", fmt(g.endedAt))
+                        DetailInfoRow("Participants", "${g.entries.size}")
+                        DetailInfoRow("Winners", "${g.winnersCount}")
+                        DetailInfoRow(
                             "Method",
                             when (g.winnerMethod) {
                                 "votes_only" -> "Votes only"
@@ -188,7 +167,6 @@ fun GiveawayDetailScreen(
                     }
                 }
 
-                // requirements
                 if (!isEnded && (
                             g.requirements.forceJoin ||
                                     g.requirements.minRefs > 0 ||
@@ -204,15 +182,14 @@ fun GiveawayDetailScreen(
                                 fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
                             )
                             Spacer(Modifier.height(6.dp))
-                            if (g.requirements.forceJoin) BulletLine("Join required channels")
-                            if (g.requirements.minRefs > 0) BulletLine("Min ${g.requirements.minRefs} referrals")
-                            if (g.requirements.minCredits > 0) BulletLine("Min ${g.requirements.minCredits} credits")
-                            if (g.requirements.minDays > 0) BulletLine("Account at least ${g.requirements.minDays} days old")
+                            if (g.requirements.forceJoin) DetailBullet("Join required channels")
+                            if (g.requirements.minRefs > 0) DetailBullet("Min ${g.requirements.minRefs} referrals")
+                            if (g.requirements.minCredits > 0) DetailBullet("Min ${g.requirements.minCredits} credits")
+                            if (g.requirements.minDays > 0) DetailBullet("Account at least ${g.requirements.minDays} days old")
                         }
                     }
                 }
 
-                // participation reward
                 if (g.participationReward.enabled && !isEnded) {
                     Spacer(Modifier.height(12.dp))
                     Surface(
@@ -237,7 +214,6 @@ fun GiveawayDetailScreen(
                     }
                 }
 
-                // join / status button
                 if (!isEnded && !isExpired) {
                     Spacer(Modifier.height(16.dp))
                     Button(
@@ -248,8 +224,8 @@ fun GiveawayDetailScreen(
                                 val refs = userData.getReferralCount(uid)
                                 val credits = userData.getCredits(uid)
                                 val days = try {
-                                    val userDoc = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-                                        .collection(com.sanji.bomberpro.FirebaseConfig.COL_USERS)
+                                    val userDoc = FirebaseFirestore.getInstance()
+                                        .collection(FirebaseConfig.COL_USERS)
                                         .document(uid).get().await()
                                     val created = userDoc.getLong("createdAt") ?: 0L
                                     if (created > 0) ((now - created) / 86400L).toInt() else 0
@@ -295,13 +271,9 @@ fun GiveawayDetailScreen(
                     }
                 }
 
-                // winners (if ended)
                 if (isEnded && g.winners.isNotEmpty()) {
                     Spacer(Modifier.height(16.dp))
-                    Text(
-                        "🏆 Winners",
-                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
-                    )
+                    Text("🏆 Winners", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
                     Spacer(Modifier.height(8.dp))
                     g.winners.forEach { w ->
                         Surface(
@@ -317,23 +289,16 @@ fun GiveawayDetailScreen(
                                         3 -> "🥉"
                                         else -> "#${w.rank}"
                                     },
-                                    fontSize = 18.sp,
-                                    modifier = Modifier.width(40.dp),
+                                    fontSize = 18.sp, modifier = Modifier.width(40.dp),
                                 )
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         w.name,
                                         fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
                                     )
-                                    Text(
-                                        "🗳 ${w.votes}v · 👥 ${w.refs}r",
-                                        fontSize = 10.sp, color = colors.onSurfaceVariant,
-                                    )
+                                    Text("🗳 ${w.votes}v · 👥 ${w.refs}r", fontSize = 10.sp, color = colors.onSurfaceVariant)
                                     if (w.prizesAwarded.isNotEmpty()) {
-                                        Text(
-                                            w.prizesAwarded.joinToString(" · "),
-                                            fontSize = 11.sp, color = colors.primary,
-                                        )
+                                        Text(w.prizesAwarded.joinToString(" · "), fontSize = 11.sp, color = colors.primary)
                                     }
                                 }
                             }
@@ -341,13 +306,9 @@ fun GiveawayDetailScreen(
                     }
                 }
 
-                // leaderboard
                 if (leaderboard.isNotEmpty()) {
                     Spacer(Modifier.height(16.dp))
-                    Text(
-                        "📊 Leaderboard",
-                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
-                    )
+                    Text("📊 Leaderboard", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
                     Spacer(Modifier.height(8.dp))
                     LazyColumn(
                         modifier = Modifier.fillMaxWidth().height(minOf(400.dp, (leaderboard.size * 55).dp)),
@@ -368,8 +329,7 @@ fun GiveawayDetailScreen(
                                             3 -> "🥉"
                                             else -> "#${row.rank}"
                                         },
-                                        fontSize = 14.sp,
-                                        modifier = Modifier.width(36.dp),
+                                        fontSize = 14.sp, modifier = Modifier.width(36.dp),
                                     )
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
@@ -380,16 +340,13 @@ fun GiveawayDetailScreen(
                                         )
                                         Text(
                                             "🗳 ${row.votes}v · 👥 ${row.refs}r",
-                                            fontSize = 10.sp,
-                                            color = colors.onSurfaceVariant,
+                                            fontSize = 10.sp, color = colors.onSurfaceVariant,
                                         )
                                     }
                                     Text(
                                         "%.1f".format(row.score),
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colors.primary,
-                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                        color = colors.primary, fontFamily = FontFamily.Monospace,
                                     )
                                 }
                             }
@@ -423,7 +380,7 @@ fun GiveawayDetailScreen(
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
+private fun DetailInfoRow(label: String, value: String) {
     val colors = LocalSanjiColors.current
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
@@ -435,7 +392,7 @@ private fun InfoRow(label: String, value: String) {
 }
 
 @Composable
-private fun BulletLine(text: String) {
+private fun DetailBullet(text: String) {
     val colors = LocalSanjiColors.current
     Row(modifier = Modifier.padding(vertical = 2.dp)) {
         Text("• ", fontSize = 11.sp, color = colors.primary)
