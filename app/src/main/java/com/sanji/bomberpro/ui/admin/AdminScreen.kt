@@ -63,6 +63,7 @@ private enum class AdminView {
     HOME, FIREBASE, FIREBASE_BULK, USERS, USER_DETAIL, ROLES,
     SETTINGS, BROADCAST, REDEEM, PRICING,
     LOGS, ANALYTICS,
+    GIVEAWAY_LIST, GIVEAWAY_CREATE,
 }
 
 @Composable
@@ -131,9 +132,25 @@ fun AdminScreen(
             onOpenPricing = { view = AdminView.PRICING },
             onOpenLogs = { view = AdminView.LOGS },
             onOpenAnalytics = { view = AdminView.ANALYTICS },
+            onOpenGiveaways = { view = AdminView.GIVEAWAY_LIST },
             onOpenBulkAdd = { showBulkAdd = true },
             onOpenBulkDeduct = { showBulkDeduct = true },
             onExit = onExit,
+        )
+
+        AdminView.GIVEAWAY_LIST -> GiveawayAdminScreen(
+            adminUid = adminUid,
+            onCreate = { view = AdminView.GIVEAWAY_CREATE },
+            onBack = { view = AdminView.HOME },
+        )
+
+        AdminView.GIVEAWAY_CREATE -> GiveawayCreateScreen(
+            adminUid = adminUid,
+            onBack = { view = AdminView.GIVEAWAY_LIST },
+            onCreated = {
+                success = "Giveaway created"
+                view = AdminView.GIVEAWAY_LIST
+            },
         )
 
         AdminView.FIREBASE_BULK -> FirebaseBulkAddScreen(
@@ -274,7 +291,7 @@ fun AdminScreen(
                 value = userQuery,
                 onValueChange = { userQuery = it },
                 leadingIcon = { Icon(Icons.Default.Search, null, tint = colors.onSurfaceVariant) },
-                placeholder = { Text("Search by name / email / uid") },
+                placeholder = { Text("Search by name / email / uid / sim") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -323,12 +340,22 @@ fun AdminScreen(
                                             )
                                         }
                                     }
+                                    if (u.username.isNotBlank()) {
+                                        Text("@${u.username}", fontSize = 10.sp, color = colors.primary)
+                                    }
                                     Text(u.email, fontSize = 10.sp, color = colors.onSurfaceVariant, maxLines = 1)
                                     Text(
                                         "UID: ${u.uid}",
                                         fontSize = 9.sp, color = colors.onSurfaceVariant,
                                         fontFamily = FontFamily.Monospace,
                                     )
+                                    if (u.sim1Number.isNotBlank() || u.sim2Number.isNotBlank()) {
+                                        Text(
+                                            "📱 ${listOfNotNull(u.sim1Number.takeIf { it.isNotBlank() }, u.sim2Number.takeIf { it.isNotBlank() }).joinToString(" / ")}",
+                                            fontSize = 9.sp, color = colors.primary,
+                                            fontFamily = FontFamily.Monospace,
+                                        )
+                                    }
                                 }
                                 Text(
                                     "💰${u.credits} 🪙${u.coins}",
@@ -485,6 +512,7 @@ private fun AdminHomeMenu(
     onOpenPricing: () -> Unit,
     onOpenLogs: () -> Unit,
     onOpenAnalytics: () -> Unit,
+    onOpenGiveaways: () -> Unit,
     onOpenBulkAdd: () -> Unit,
     onOpenBulkDeduct: () -> Unit,
     onExit: () -> Unit,
@@ -512,11 +540,12 @@ private fun AdminHomeMenu(
 
         AdminMenuCard("🔥", "Manage Firebases", "Add / remove / enable realtime DB nodes", onOpenFirebase)
         AdminMenuCard("📁", "Bulk Add Firebases", "Import from file or paste — validates URLs", onOpenFirebaseBulk)
-        AdminMenuCard("👥", "Users", "Search, view, credits, ban, limits, notes, tags, subscription", onOpenUsers)
+        AdminMenuCard("👥", "Users", "Search, view, credits, ban, limits, notes, tags, subscription, SIM", onOpenUsers)
         if (isOwner) {
             AdminMenuCard("🔱", "Roles & Admins", "Add/remove super admins and admins · transfer ownership", onOpenRoles)
             AdminMenuCard("⚙️", "Settings", "OTP cost, referral rewards, UPI, maintenance, force update", onOpenSettings)
         }
+        AdminMenuCard("🎁", "Giveaways", "Create, manage, end giveaways · vote adjust · leaderboard", onOpenGiveaways)
         AdminMenuCard("📢", "Broadcast", "Send message to all users", onOpenBroadcast)
         AdminMenuCard("🎟", "Redeem Codes", "Create / view / delete codes", onOpenRedeem)
         if (isOwner) {
@@ -528,11 +557,6 @@ private fun AdminHomeMenu(
         AdminMenuCard("💸", "Bulk Deduct Credits", "Deduct from manual pool only · purchased credits untouched", onOpenBulkDeduct)
 
         Spacer(Modifier.height(24.dp))
-        Text(
-            "Support tickets · Appeals coming in next update",
-            fontSize = 10.sp, color = colors.onSurfaceVariant,
-            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
-        )
     }
 }
 
