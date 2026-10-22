@@ -50,7 +50,6 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -90,82 +89,38 @@ fun FirebaseBulkAddScreen(
     var tab by remember { mutableStateOf(BulkTab.FILE) }
     var phase by remember { mutableStateOf(BulkPhase.IDLE) }
 
-    // extracted URLs + per-url selected state
     val extracted = remember { mutableStateListOf<String>() }
     val selected = remember { mutableStateListOf<Boolean>() }
 
     var pasteText by remember { mutableStateOf("") }
     var showPasteDialog by remember { mutableStateOf(false) }
 
-    // advanced
     var advancedOpen by remember { mutableStateOf(false) }
     var useCustomRegex by remember { mutableStateOf(false) }
     var customRegex by remember { mutableStateOf("") }
     var excludeExisting by remember { mutableStateOf(true) }
 
-    // progress
     var valCurrent by remember { mutableStateOf(0) }
     var valTotal by remember { mutableStateOf(0) }
     var valValid by remember { mutableStateOf(0) }
     var valFailed by remember { mutableStateOf(0) }
     var phaseLabel by remember { mutableStateOf("") }
 
-    // results
     var addedCount by remember { mutableStateOf(0) }
     var skippedExisting by remember { mutableStateOf(0) }
     var failureList by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var showFailureDetails by remember { mutableStateOf(false) }
     var cancelled by remember { mutableStateOf(false) }
 
-    // export status
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
     val cancelFlag = remember { AtomicBoolean(false) }
 
-    // file picker — multi-file, safer than GetContent
     val multiFilePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
         if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
-        scope.launch {
-            runExtractFromUris(uris.map { it.toString() })
-        }
-    }
-
-    suspend fun runExtractFromUris(uriStrings: List<String>) {
-        phase = BulkPhase.EXTRACTING
-        error = null
-        extracted.clear()
-        selected.clear()
-        try {
-            val pattern = if (useCustomRegex && customRegex.isNotBlank()) customRegex else null
-            val allUrls = mutableListOf<String>()
-            for (s in uriStrings) {
-                val read = service.readUriText(Uri.parse(s), context.contentResolver)
-                if (read.isFailure) {
-                    error = "Read failed for one file: ${read.exceptionOrNull()?.message}"
-                    continue
-                }
-                val urls = service.extractUrls(read.getOrNull() ?: "", pattern)
-                allUrls.addAll(urls)
-            }
-            val unique = allUrls.toSet().toList()
-            if (unique.isEmpty()) {
-                error = "No URLs found in selected file(s)"
-                phase = BulkPhase.IDLE
-                return
-            }
-            extracted.addAll(unique)
-            selected.addAll(unique.map { true })
-            phase = BulkPhase.PREVIEW
-        } catch (e: Exception) {
-            error = "Extract failed: ${e.message}"
-            phase = BulkPhase.IDLE
-        }
-    }
-
-    fun runExtractFromText(text: String) {
         scope.launch {
             phase = BulkPhase.EXTRACTING
             error = null
@@ -173,14 +128,24 @@ fun FirebaseBulkAddScreen(
             selected.clear()
             try {
                 val pattern = if (useCustomRegex && customRegex.isNotBlank()) customRegex else null
-                val urls = service.extractUrls(text, pattern)
-                if (urls.isEmpty()) {
-                    error = "No URLs found in pasted text"
+                val allUrls = mutableListOf<String>()
+                for (u in uris) {
+                    val read = service.readUriText(u, context.contentResolver)
+                    if (read.isFailure) {
+                        error = "Read failed for one file: ${read.exceptionOrNull()?.message}"
+                        continue
+                    }
+                    val urls = service.extractUrls(read.getOrNull() ?: "", pattern)
+                    allUrls.addAll(urls)
+                }
+                val unique = allUrls.toSet().toList()
+                if (unique.isEmpty()) {
+                    error = "No URLs found in selected file(s)"
                     phase = BulkPhase.IDLE
                     return@launch
                 }
-                extracted.addAll(urls)
-                selected.addAll(urls.map { true })
+                extracted.addAll(unique)
+                selected.addAll(unique.map { true })
                 phase = BulkPhase.PREVIEW
             } catch (e: Exception) {
                 error = "Extract failed: ${e.message}"
@@ -290,7 +255,6 @@ fun FirebaseBulkAddScreen(
 
     Box(modifier = Modifier.fillMaxSize().background(colors.background)) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            // top bar
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = {
                     if (phase == BulkPhase.VALIDATING || phase == BulkPhase.INSERTING) {
@@ -319,7 +283,6 @@ fun FirebaseBulkAddScreen(
 
             Spacer(Modifier.height(8.dp))
 
-            // tabs
             if (phase == BulkPhase.IDLE) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     TabChip("File", tab == BulkTab.FILE) { tab = BulkTab.FILE }
@@ -329,7 +292,6 @@ fun FirebaseBulkAddScreen(
                 Spacer(Modifier.height(12.dp))
             }
 
-            // content per phase
             when (phase) {
                 BulkPhase.IDLE -> {
                     Column(
@@ -432,16 +394,10 @@ fun FirebaseBulkAddScreen(
                         extracted = extracted,
                         selected = selected,
                         onToggle = { i ->
-                            if (i in selected.indices) {
-                                selected[i] = !selected[i]
-                            }
+                            if (i in selected.indices) selected[i] = !selected[i]
                         },
-                        onSelectAll = {
-                            for (i in selected.indices) selected[i] = true
-                        },
-                        onDeselectAll = {
-                            for (i in selected.indices) selected[i] = false
-                        },
+                        onSelectAll = { for (i in selected.indices) selected[i] = true },
+                        onDeselectAll = { for (i in selected.indices) selected[i] = false },
                         onProceed = { runValidateAndInsert() },
                         onCancel = {
                             extracted.clear()
@@ -462,16 +418,14 @@ fun FirebaseBulkAddScreen(
                             Spacer(Modifier.height(16.dp))
                             Text(
                                 phaseLabel,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                                 color = colors.onBackground,
                             )
                             if (valTotal > 0) {
                                 Spacer(Modifier.height(12.dp))
                                 LinearProgressIndicator(
                                     progress = {
-                                        if (valTotal > 0) valCurrent.toFloat() / valTotal
-                                        else 0f
+                                        if (valTotal > 0) valCurrent.toFloat() / valTotal else 0f
                                     },
                                     color = colors.primary,
                                     trackColor = colors.surface,
@@ -480,16 +434,14 @@ fun FirebaseBulkAddScreen(
                                 Spacer(Modifier.height(8.dp))
                                 Text(
                                     "$valCurrent / $valTotal  ·  ✅ $valValid  ·  ❌ $valFailed",
-                                    fontSize = 11.sp,
-                                    color = colors.onSurfaceVariant,
+                                    fontSize = 11.sp, color = colors.onSurfaceVariant,
                                 )
                             }
                             Spacer(Modifier.height(20.dp))
                             Button(
                                 onClick = { cancelFlag.set(true) },
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = colors.error,
-                                    contentColor = Color.White,
+                                    containerColor = colors.error, contentColor = Color.White,
                                 ),
                                 shape = RoundedCornerShape(12.dp),
                             ) { Text("Cancel", fontWeight = FontWeight.Bold) }
@@ -532,7 +484,27 @@ fun FirebaseBulkAddScreen(
                         val txt = pasteText.trim()
                         if (txt.isBlank()) return@TextButton
                         showPasteDialog = false
-                        runExtractFromText(txt)
+                        scope.launch {
+                            phase = BulkPhase.EXTRACTING
+                            error = null
+                            extracted.clear()
+                            selected.clear()
+                            try {
+                                val pattern = if (useCustomRegex && customRegex.isNotBlank()) customRegex else null
+                                val urls = service.extractUrls(txt, pattern)
+                                if (urls.isEmpty()) {
+                                    error = "No URLs found in pasted text"
+                                    phase = BulkPhase.IDLE
+                                    return@launch
+                                }
+                                extracted.addAll(urls)
+                                selected.addAll(urls.map { true })
+                                phase = BulkPhase.PREVIEW
+                            } catch (e: Exception) {
+                                error = "Extract failed: ${e.message}"
+                                phase = BulkPhase.IDLE
+                            }
+                        }
                         pasteText = ""
                     },
                     enabled = pasteText.isNotBlank(),
@@ -551,8 +523,7 @@ fun FirebaseBulkAddScreen(
                 Column {
                     Text(
                         "Paste any text with URLs — one per line or mixed.",
-                        fontSize = 11.sp,
-                        color = colors.onSurfaceVariant,
+                        fontSize = 11.sp, color = colors.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
@@ -565,8 +536,7 @@ fun FirebaseBulkAddScreen(
                     )
                     Text(
                         "${pasteText.length} chars",
-                        fontSize = 10.sp,
-                        color = colors.onSurfaceVariant,
+                        fontSize = 10.sp, color = colors.onSurfaceVariant,
                     )
                 }
             },
@@ -574,9 +544,6 @@ fun FirebaseBulkAddScreen(
     }
 }
 
-// ============================================================
-//  TABS
-// ============================================================
 @Composable
 private fun TabChip(label: String, selected: Boolean, onClick: () -> Unit) {
     val colors = LocalSanjiColors.current
@@ -587,8 +554,7 @@ private fun TabChip(label: String, selected: Boolean, onClick: () -> Unit) {
     ) {
         Text(
             label,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp, fontWeight = FontWeight.Bold,
             color = if (selected) Color.Black else colors.onBackground,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
@@ -626,9 +592,7 @@ private fun FileTab(
             }
         }
     }
-
     Spacer(Modifier.height(12.dp))
-
     AdvancedSection(
         expanded = advancedOpen,
         onToggle = onAdvancedToggle,
@@ -670,9 +634,7 @@ private fun PasteTab(
             }
         }
     }
-
     Spacer(Modifier.height(12.dp))
-
     AdvancedSection(
         expanded = advancedOpen,
         onToggle = onAdvancedToggle,
@@ -707,25 +669,22 @@ private fun AdvancedSection(
             modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Advanced", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground, modifier = Modifier.weight(1f))
+            Text(
+                "Advanced",
+                fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                color = colors.onBackground, modifier = Modifier.weight(1f),
+            )
             Icon(
                 if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                null,
-                tint = colors.primary,
-                modifier = Modifier.size(20.dp),
+                null, tint = colors.primary, modifier = Modifier.size(20.dp),
             )
         }
     }
 
     if (expanded) {
         Spacer(Modifier.height(8.dp))
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = colors.surface,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        Surface(shape = RoundedCornerShape(12.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp)) {
-                // exclude existing
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Skip already existing", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
@@ -741,7 +700,6 @@ private fun AdvancedSection(
                     )
                 }
                 Spacer(Modifier.height(10.dp))
-                // custom regex
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Custom regex", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
@@ -791,10 +749,8 @@ private fun ExportTab(
         Spacer(Modifier.height(16.dp))
         Text(
             exportStatus,
-            fontSize = 12.sp,
-            color = colors.success,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
+            fontSize = 12.sp, color = colors.success,
+            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
         )
     }
 }
@@ -844,10 +800,8 @@ private fun PreviewPhase(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "${extracted.size} URLs found · $selectedCount selected",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = colors.onBackground,
-                modifier = Modifier.weight(1f),
+                fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                color = colors.onBackground, modifier = Modifier.weight(1f),
             )
             TextButton(onClick = onSelectAll) { Text("All", color = colors.primary, fontSize = 11.sp) }
             TextButton(onClick = onDeselectAll) { Text("None", color = colors.onSurfaceVariant, fontSize = 11.sp) }
@@ -869,10 +823,8 @@ private fun PreviewPhase(
                         )
                         Text(
                             extracted.getOrNull(i) ?: "",
-                            fontSize = 11.sp,
-                            color = colors.onBackground,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 2,
+                            fontSize = 11.sp, color = colors.onBackground,
+                            fontFamily = FontFamily.Monospace, maxLines = 2,
                             modifier = Modifier.padding(vertical = 4.dp),
                         )
                     }
@@ -933,9 +885,7 @@ private fun ResultPhase(
         Spacer(Modifier.height(12.dp))
         Text(
             if (cancelled) "Cancelled" else "Import Complete",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            color = colors.onBackground,
+            fontSize = 20.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
         )
         Spacer(Modifier.height(20.dp))
 
