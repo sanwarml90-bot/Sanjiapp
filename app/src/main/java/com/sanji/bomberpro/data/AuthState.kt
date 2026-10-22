@@ -48,6 +48,7 @@ data class UserProfile(
     val uid: String = "",
     val email: String = "",
     val displayName: String = "",
+    val username: String = "",
     val photoUrl: String? = null,
     val role: String = "user",
     val credits: Int = 0,
@@ -70,10 +71,6 @@ data class UserProfile(
     val createdAt: Long = 0L,
     val lastActive: Long = 0L,
 ) {
-    /**
-     * True if user needs to (re)accept terms.
-     * Compares stored version vs current global terms version.
-     */
     fun needsTermsAcceptance(currentTermsVersion: Int, termsRequired: Boolean): Boolean {
         if (!termsRequired) return false
         if (!termsAccepted) return true
