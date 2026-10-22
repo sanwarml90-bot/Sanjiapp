@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlusOne
 import androidx.compose.material.icons.filled.Refresh
@@ -33,6 +34,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -60,10 +62,13 @@ import com.sanji.bomberpro.services.AdminService
 import com.sanji.bomberpro.services.AdminUser
 import com.sanji.bomberpro.services.AppLockService
 import com.sanji.bomberpro.services.AppLockState
+import com.sanji.bomberpro.services.FirebaseImportService
+import com.sanji.bomberpro.services.ImportResult
 import com.sanji.bomberpro.services.SettingsService
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 private enum class AdminView {
     HOME, FIREBASE, FIREBASE_BULK, USERS, USER_DETAIL, USER_SMS_HISTORY, ROLES,
@@ -85,12 +90,14 @@ fun AdminScreen(
     val adminService = remember { AdminService() }
     val settingsService = remember { SettingsService() }
     val lockService = remember { AppLockService() }
+    val importService = remember { FirebaseImportService() }
 
     var view by remember { mutableStateOf(AdminView.HOME) }
 
     var firebases by remember { mutableStateOf<List<FirebaseNode>>(emptyList()) }
     var loadingFb by remember { mutableStateOf(false) }
     var showAddFb by remember { mutableStateOf(false) }
+    var showBulkPaste by remember { mutableStateOf(false) }
 
     var users by remember { mutableStateOf<List<AdminUser>>(emptyList()) }
     var userQuery by remember { mutableStateOf("") }
@@ -192,11 +199,22 @@ fun AdminScreen(
                 IconButton(onClick = { loadFirebases() }) {
                     Icon(Icons.Default.Refresh, "Refresh", tint = colors.primary)
                 }
+                IconButton(onClick = { showBulkPaste = true }) {
+                    Icon(Icons.Default.ContentPaste, "Bulk Paste", tint = colors.primary)
+                }
                 IconButton(onClick = { showAddFb = true }) {
                     Icon(Icons.Default.PlusOne, "Add", tint = colors.primary)
                 }
             }
+
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Tap 📋 icon to paste many URLs at once — auto-detects + validates + adds",
+                fontSize = 10.sp, color = colors.onSurfaceVariant,
+            )
+
             Spacer(Modifier.height(8.dp))
+
             if (loadingFb) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = colors.primary)
@@ -207,9 +225,13 @@ fun AdminScreen(
                         Text("No firebases", fontSize = 14.sp, color = colors.onSurfaceVariant)
                         Spacer(Modifier.height(8.dp))
                         Button(
-                            onClick = { showAddFb = true },
+                            onClick = { showBulkPaste = true },
                             colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
-                        ) { Text("Add Firebase") }
+                        ) { Text("Bulk Paste URLs") }
+                        Spacer(Modifier.height(6.dp))
+                        TextButton(onClick = { showAddFb = true }) {
+                            Text("or add one manually", color = colors.onSurfaceVariant, fontSize = 12.sp)
+                        }
                     }
                 }
             } else {
@@ -259,6 +281,14 @@ fun AdminScreen(
                         }
                     },
                     error = error,
+                )
+            }
+            if (showBulkPaste) {
+                BulkPasteFirebaseDialog(
+                    adminUid = adminUid,
+                    service = importService,
+                    onDismiss = { showBulkPaste = false },
+                    onComplete = { loadFirebases() },
                 )
             }
         }
@@ -459,6 +489,208 @@ fun AdminScreen(
 }
 
 // ============================================================
+//  BULK PASTE DIALOG — inside manage firebases
+// ============================================================
+@Composable
+private fun BulkPasteFirebaseDialog(
+    adminUid: String,
+    service: FirebaseImportService,
+    onDismiss: () -> Unit,
+    onComplete: () -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    val scope = rememberCoroutineScope()
+
+    var text by remember { mutableStateOf("") }
+    var processing by remember { mutableStateOf(false) }
+    var phase by remember { mutableStateOf("") }
+    var valCurrent by remember { mutableStateOf(0) }
+    var valTotal by remember { mutableStateOf(0) }
+    var valValid by remember { mutableStateOf(0) }
+    var valFailed by remember { mutableStateOf(0) }
+    var result by remember { mutableStateOf<ImportResult?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = { if (!processing) onDismiss() },
+        confirmButton = {
+            if (result == null) {
+                TextButton(
+                    onClick = {
+                        val txt = text.trim()
+                        if (txt.isBlank()) return@TextButton
+                        processing = true
+                        error = null
+                        phase = "Extracting URLs…"
+
+                        scope.launch {
+                            try {
+                                val urls = service.extractUrls(txt)
+                                if (urls.isEmpty()) {
+                                    error = "No URLs found in text"
+                                    processing = false
+                                    return@launch
+                                }
+
+                                phase = "Loading existing…"
+                                val existing = service.loadExistingUrls()
+                                val already = urls.count { it.trimEnd('/') in existing }
+                                val toCheck = urls.filter { it.trimEnd('/') !in existing }
+
+                                if (toCheck.isEmpty()) {
+                                    result = ImportResult(
+                                        added = 0,
+                                        skippedExisting = already,
+                                        skippedDuplicate = 0,
+                                        failed = 0,
+                                        failureSummary = "",
+                                        totalUrls = urls.size,
+                                        existingAfter = existing.size,
+                                        failures = emptyList(),
+                                    )
+                                    processing = false
+                                    return@launch
+                                }
+
+                                phase = "Validating…"
+                                val validation = service.validateUrls(
+                                    urls = toCheck,
+                                    existingUrls = existing,
+                                    cancel = AtomicBoolean(false),
+                                    onProgress = { c, t, v, f ->
+                                        valCurrent = c
+                                        valTotal = t
+                                        valValid = v
+                                        valFailed = f
+                                    },
+                                )
+
+                                phase = "Inserting…"
+                                val insertRes = service.insertValidated(adminUid, validation.valid)
+                                val inserted = insertRes.getOrNull() ?: 0
+
+                                val summary = validation.failed
+                                    .groupBy { it.second }
+                                    .mapValues { it.value.size }
+                                    .entries
+                                    .joinToString(" · ") { "${it.key}: ${it.value}" }
+
+                                result = ImportResult(
+                                    added = inserted,
+                                    skippedExisting = already,
+                                    skippedDuplicate = validation.valid.size - inserted,
+                                    failed = validation.failed.size,
+                                    failureSummary = summary,
+                                    totalUrls = urls.size,
+                                    existingAfter = existing.size + inserted,
+                                    failures = validation.failed,
+                                )
+                                onComplete()
+                            } catch (e: Exception) {
+                                error = e.message ?: "Failed"
+                            } finally {
+                                processing = false
+                            }
+                        }
+                    },
+                    enabled = !processing && text.isNotBlank(),
+                ) { Text("Add All", color = colors.primary, fontWeight = FontWeight.Bold) }
+            } else {
+                TextButton(onClick = onDismiss) {
+                    Text("Done", color = colors.primary, fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        dismissButton = {
+            if (result == null) {
+                TextButton(onClick = onDismiss, enabled = !processing) {
+                    Text("Cancel", color = colors.onSurfaceVariant)
+                }
+            }
+        },
+        containerColor = colors.surface,
+        titleContentColor = colors.onBackground,
+        textContentColor = colors.onBackground,
+        title = { Text(if (result == null) "Bulk Paste URLs" else "Import Report") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                if (result == null) {
+                    if (processing) {
+                        Text(phase, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+                        if (valTotal > 0) {
+                            Spacer(Modifier.height(10.dp))
+                            LinearProgressIndicator(
+                                progress = { if (valTotal > 0) valCurrent.toFloat() / valTotal else 0f },
+                                color = colors.primary,
+                                trackColor = colors.background,
+                                modifier = Modifier.fillMaxWidth().height(6.dp),
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "$valCurrent / $valTotal  ·  ✅ $valValid  ❌ $valFailed",
+                                fontSize = 11.sp, color = colors.onSurfaceVariant,
+                            )
+                        }
+                    } else {
+                        Text(
+                            "Paste any text with URLs — one per line, mixed, or copied from anywhere. Bot auto-detects every http(s) URL, validates it, and adds valid ones.",
+                            fontSize = 11.sp, color = colors.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = text,
+                            onValueChange = { text = it },
+                            placeholder = { Text("https://abc.firebaseio.com\nhttps://xyz.firebasedatabase.app\n…") },
+                            minLines = 8,
+                            maxLines = 14,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            "${text.length} chars · ${service.extractUrls(text).size} URLs detected",
+                            fontSize = 10.sp, color = colors.onSurfaceVariant,
+                        )
+                    }
+
+                    if (error != null) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(error!!, color = colors.error, fontSize = 12.sp)
+                    }
+                } else {
+                    val r = result!!
+                    ResultLine("📄 Total URLs detected", "${r.totalUrls}", colors.onBackground)
+                    ResultLine("✅ Added", "${r.added}", colors.success)
+                    ResultLine("⏭ Already existed", "${r.skippedExisting}", colors.onSurfaceVariant)
+                    ResultLine("⏭ Duplicate in batch", "${r.skippedDuplicate}", colors.onSurfaceVariant)
+                    ResultLine(
+                        "❌ Failed",
+                        "${r.failed}",
+                        if (r.failed > 0) colors.error else colors.onSurfaceVariant,
+                    )
+                    ResultLine("🔥 Total firebases now", "${r.existingAfter}", colors.primary)
+
+                    if (r.failureSummary.isNotBlank()) {
+                        Spacer(Modifier.height(10.dp))
+                        Text("Failure breakdown:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                        Text(r.failureSummary, fontSize = 11.sp, color = colors.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun ResultLine(label: String, value: String, valueColor: Color) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, fontSize = 12.sp, color = LocalSanjiColors.current.onSurfaceVariant)
+        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = valueColor)
+    }
+}
+
+// ============================================================
 //  VERSION CONTROL SCREEN
 // ============================================================
 @Composable
@@ -526,14 +758,6 @@ private fun VersionControlScreen(
                         Text("APK URL:", fontSize = 11.sp, color = colors.onSurfaceVariant)
                         Text(s.apkUrl, fontSize = 11.sp, color = colors.primary, fontFamily = FontFamily.Monospace)
                     }
-                    if (s.lockedAt > 0) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Locked at: " + java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
-                                .format(java.util.Date(s.lockedAt * 1000L)),
-                            fontSize = 11.sp, color = colors.onSurfaceVariant,
-                        )
-                    }
                 }
             }
         }
@@ -563,7 +787,7 @@ private fun VersionControlScreen(
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                "Once locked, all users (except owner) will see a blocking screen telling them to update. Owner is exempt.",
+                "Once locked, all users (except owner) will see a blocking screen telling them to update.",
                 fontSize = 11.sp, color = colors.onSurfaceVariant, textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -649,11 +873,10 @@ private fun LockDialog(
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    "All users (except owner) will be BLOCKED from using the app. They will see the message below and must update to a new version.",
+                    "All users (except owner) will be BLOCKED. They will see the message below and must update to continue.",
                     fontSize = 11.sp, color = colors.error,
                 )
                 Spacer(Modifier.height(12.dp))
-
                 Text("Message shown to users:", fontSize = 11.sp, color = colors.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
@@ -663,7 +886,6 @@ private fun LockDialog(
                     maxLines = 5,
                     modifier = Modifier.fillMaxWidth(),
                 )
-
                 Spacer(Modifier.height(10.dp))
                 Text("New APK URL (optional):", fontSize = 11.sp, color = colors.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
@@ -674,7 +896,6 @@ private fun LockDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-
                 Spacer(Modifier.height(14.dp))
                 Text("Type STOP to confirm:", fontSize = 11.sp, color = colors.error, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
@@ -722,7 +943,7 @@ private fun AdminHomeMenu(
             Text("Admin Panel", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = colors.onBackground, modifier = Modifier.weight(1f))
         }
         Spacer(Modifier.height(16.dp))
-        AdminMenuCard("🔥", "Manage Firebases", "Add / remove / enable realtime DB nodes", onOpenFirebase)
+        AdminMenuCard("🔥", "Manage Firebases", "Add / remove / enable · bulk paste supported", onOpenFirebase)
         AdminMenuCard("📁", "Bulk Add Firebases", "Import from file or paste — validates URLs", onOpenFirebaseBulk)
         AdminMenuCard("👥", "Users", if (isOwner) "Full user access" else "List only · owner views details", onOpenUsers)
         if (isOwner) {
