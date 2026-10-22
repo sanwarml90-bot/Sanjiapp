@@ -77,11 +77,7 @@ fun BulkBlastScreen(
 ) {
     val authState by authManager.authState.collectAsState()
     val logged = authState as? AuthState.LoggedIn
-
-    if (logged == null) {
-        onBack()
-        return
-    }
+    if (logged == null) { onBack(); return }
 
     val uid = logged.user.uid
     val userName = logged.profile?.displayName ?: (logged.user.displayName ?: "User")
@@ -133,74 +129,41 @@ fun BulkBlastScreen(
                     val contacts = contactsSvc.loadContacts()
                     val all = mutableListOf<String>()
                     contacts.forEach { c -> all.addAll(c.phones) }
-                    val cleaned = bulkSvc.cleanNumbers(all)
-                    numbersList = cleaned.toMutableList()
+                    numbersList = bulkSvc.cleanNumbers(all).toMutableList()
                     error = null
                 } catch (e: Exception) {
-                    error = "Failed to load contacts: ${e.message}"
-                } finally {
-                    loading = false
-                }
+                    error = "Failed: ${e.message}"
+                } finally { loading = false }
             }
-        } else {
-            error = "Contacts permission denied"
-        }
+        } else { error = "Contacts permission denied" }
     }
 
-    // premium check on open
     LaunchedEffect(step) {
         if (step == BulkStep.PREMIUM_CHECK) {
-            if (!isAdmin) {
-                val isPrem = bulkSvc.isUserPremium(uid)
-                livePremium = isPrem
-            } else {
-                livePremium = true
-            }
+            if (!isAdmin) livePremium = bulkSvc.isUserPremium(uid) else livePremium = true
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().background(colors.background).padding(16.dp),
-    ) {
+    Column(modifier = Modifier.fillMaxSize().background(colors.background).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = {
-                if (step == BulkStep.EXECUTE) {
-                    cancelFlag.set(true)
-                } else if (step == BulkStep.RESULT) {
-                    // reset
-                    step = BulkStep.NUMBERS
-                    summary = null
-                    error = null
-                } else {
-                    onBack()
-                }
+                if (step == BulkStep.EXECUTE) cancelFlag.set(true)
+                else if (step == BulkStep.RESULT) { step = BulkStep.NUMBERS; summary = null; error = null }
+                else onBack()
             }) {
                 Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
             }
             Spacer(Modifier.weight(1f))
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = colors.primary.copy(alpha = 0.15f),
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "💰 $liveCredits",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colors.primary,
-                    )
+            Surface(shape = RoundedCornerShape(20.dp), color = colors.primary.copy(alpha = 0.15f)) {
+                Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    Text("💰 $liveCredits", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.primary)
                 }
             }
         }
 
         Spacer(Modifier.height(12.dp))
 
-        Column(
-            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-        ) {
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             when (step) {
                 BulkStep.PREMIUM_CHECK -> PremiumCheckStep(
                     isPremium = livePremium || isAdmin,
@@ -216,11 +179,9 @@ fun BulkBlastScreen(
                     loading = loading,
                     onAddManual = {
                         val clean = bulkSvc.cleanNumbers(listOf(manualNumberInput))
-                        if (clean.isEmpty()) {
-                            error = "Invalid number"
-                        } else if (clean.first() in numbersList) {
-                            error = "Already in list"
-                        } else {
+                        if (clean.isEmpty()) error = "Invalid number"
+                        else if (clean.first() in numbersList) error = "Already in list"
+                        else {
                             numbersList = (numbersList + clean.first()).toMutableList()
                             manualNumberInput = ""
                             error = null
@@ -228,14 +189,9 @@ fun BulkBlastScreen(
                     },
                     onRemove = { idx ->
                         val newList = numbersList.toMutableList()
-                        if (idx in newList.indices) {
-                            newList.removeAt(idx)
-                            numbersList = newList
-                        }
+                        if (idx in newList.indices) { newList.removeAt(idx); numbersList = newList }
                     },
-                    onClearAll = {
-                        numbersList = mutableListOf()
-                    },
+                    onClearAll = { numbersList = mutableListOf() },
                     onPickContacts = {
                         if (contactsSvc.hasPermission()) {
                             scope.launch {
@@ -244,29 +200,17 @@ fun BulkBlastScreen(
                                     val contacts = contactsSvc.loadContacts()
                                     val all = mutableListOf<String>()
                                     contacts.forEach { c -> all.addAll(c.phones) }
-                                    val cleaned = bulkSvc.cleanNumbers(all)
-                                    val merged = (numbersList + cleaned).distinct().toMutableList()
-                                    numbersList = merged
+                                    numbersList = (numbersList + bulkSvc.cleanNumbers(all)).distinct().toMutableList()
                                     error = null
-                                } catch (e: Exception) {
-                                    error = "Contacts failed: ${e.message}"
-                                } finally {
-                                    loading = false
-                                }
+                                } catch (e: Exception) { error = "Contacts failed: ${e.message}" }
+                                finally { loading = false }
                             }
-                        } else {
-                            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
-                        }
+                        } else contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
                     },
                     onNext = {
-                        if (numbersList.size < FirebaseConfig.BULK_MIN_NUMBERS) {
-                            error = "Add at least ${FirebaseConfig.BULK_MIN_NUMBERS} numbers"
-                        } else if (numbersList.size > FirebaseConfig.BULK_MAX_NUMBERS) {
-                            error = "Max ${FirebaseConfig.BULK_MAX_NUMBERS} numbers per blast"
-                        } else {
-                            error = null
-                            step = BulkStep.MESSAGE
-                        }
+                        if (numbersList.size < FirebaseConfig.BULK_MIN_NUMBERS) error = "Add at least ${FirebaseConfig.BULK_MIN_NUMBERS} numbers"
+                        else if (numbersList.size > FirebaseConfig.BULK_MAX_NUMBERS) error = "Max ${FirebaseConfig.BULK_MAX_NUMBERS} numbers"
+                        else { error = null; step = BulkStep.MESSAGE }
                     },
                 )
 
@@ -293,10 +237,7 @@ fun BulkBlastScreen(
                     estimate = estimate,
                     onEstimate = {
                         val cnt = perNumberCountText.toIntOrNull() ?: 0
-                        if (cnt <= 0) {
-                            error = "Count must be > 0"
-                            return@ConfigStep
-                        }
+                        if (cnt <= 0) { error = "Count must be > 0"; return@ConfigStep }
                         scope.launch {
                             loading = true
                             estimate = bulkSvc.estimate(
@@ -311,28 +252,18 @@ fun BulkBlastScreen(
                     },
                     onStart = {
                         val cnt = perNumberCountText.toIntOrNull() ?: 0
-                        if (cnt <= 0) {
-                            error = "Count must be > 0"
-                            return@ConfigStep
-                        }
+                        if (cnt <= 0) { error = "Count must be > 0"; return@ConfigStep }
                         val est = estimate
-                        if (est == null) {
-                            error = "Tap Estimate first"
-                            return@ConfigStep
-                        }
+                        if (est == null) { error = "Tap Estimate first"; return@ConfigStep }
                         if (!isAdmin && !est.affordable) {
                             error = "Not enough credits (need ${est.totalCredits})"
                             return@ConfigStep
                         }
-
                         error = null
                         cancelFlag = AtomicBoolean(false)
-                        progressIndex = 0
-                        progressSent = 0
-                        progressFailed = 0
+                        progressIndex = 0; progressSent = 0; progressFailed = 0
                         progressTotalNumbers = numbersList.size
                         step = BulkStep.EXECUTE
-
                         scope.launch {
                             val summaryResult = bulkSvc.executeBulk(
                                 uid = uid,
@@ -369,22 +300,19 @@ fun BulkBlastScreen(
                     onStop = { cancelFlag.set(true) },
                 )
 
-                BulkStep.RESULT -> {
-                    val s = summary
-                    ResultStep(
-                        summary = s,
-                        isAdmin = isAdmin,
-                        onDone = {
-                            step = BulkStep.NUMBERS
-                            summary = null
-                            numbersList = mutableListOf()
-                            message = ""
-                            perNumberCountText = "10"
-                            error = null
-                            estimate = null
-                        },
-                    )
-                }
+                BulkStep.RESULT -> ResultStep(
+                    summary = summary,
+                    isAdmin = isAdmin,
+                    onDone = {
+                        step = BulkStep.NUMBERS
+                        summary = null
+                        numbersList = mutableListOf()
+                        message = ""
+                        perNumberCountText = "10"
+                        error = null
+                        estimate = null
+                    },
+                )
             }
 
             if (error != null && step != BulkStep.RESULT) {
@@ -395,60 +323,28 @@ fun BulkBlastScreen(
     }
 }
 
-// ============================================================
-//  PREMIUM CHECK
-// ============================================================
 @Composable
-private fun PremiumCheckStep(
-    isPremium: Boolean,
-    isAdmin: Boolean,
-    onContinue: () -> Unit,
-    onBack: () -> Unit,
-) {
+private fun PremiumCheckStep(isPremium: Boolean, isAdmin: Boolean, onContinue: () -> Unit, onBack: () -> Unit) {
     val colors = LocalSanjiColors.current
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(40.dp))
         if (isPremium) {
-            Icon(
-                Icons.Default.CheckCircle,
-                null,
-                tint = colors.success,
-                modifier = Modifier.size(64.dp),
-            )
+            Icon(Icons.Default.CheckCircle, null, tint = colors.success, modifier = Modifier.size(64.dp))
             Spacer(Modifier.height(16.dp))
-            Text(
-                "Bulk Blast Mode",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Black,
-                color = colors.onBackground,
-            )
+            Text("Bulk Blast Mode", fontSize = 22.sp, fontWeight = FontWeight.Black, color = colors.onBackground)
             Spacer(Modifier.height(8.dp))
             Text(
                 if (isAdmin) "Admin access — unlimited" else "Premium unlocked",
-                fontSize = 12.sp,
-                color = colors.onSurfaceVariant,
+                fontSize = 12.sp, color = colors.onSurfaceVariant,
             )
             Spacer(Modifier.height(20.dp))
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = colors.surface,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
+            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
-                    Text(
-                        "Send SMS to multiple numbers at once:",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colors.onBackground,
-                    )
+                    Text("Send SMS to multiple numbers at once:", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
                     Spacer(Modifier.height(8.dp))
                     BulletLine("📋 Paste or add numbers manually")
                     BulletLine("📞 Import from phone contacts")
                     BulletLine("💰 Each number costs credits")
-                    BulletLine("🚀 Supports power modes 2x - 10x")
                     BulletLine("♻️ Failed sends refunded")
                 }
             }
@@ -457,63 +353,19 @@ private fun PremiumCheckStep(
                 onClick = onContinue,
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colors.primary,
-                    contentColor = Color.Black,
-                ),
+                colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
             ) { Text("Continue", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
         } else {
-            Icon(
-                Icons.Default.Lock,
-                null,
-                tint = colors.onSurfaceVariant,
-                modifier = Modifier.size(64.dp),
-            )
+            Icon(Icons.Default.Lock, null, tint = colors.onSurfaceVariant, modifier = Modifier.size(64.dp))
             Spacer(Modifier.height(16.dp))
-            Text(
-                "Premium Feature",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Black,
-                color = colors.onBackground,
-            )
+            Text("Premium Feature", fontSize = 22.sp, fontWeight = FontWeight.Black, color = colors.onBackground)
             Spacer(Modifier.height(8.dp))
-            Text(
-                "Bulk Blast is available for premium users only.",
-                fontSize = 13.sp,
-                color = colors.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(24.dp))
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = colors.surface,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        "What you get with premium:",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colors.onBackground,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    BulletLine("📞 Bulk blast from contacts")
-                    BulletLine("🚀 All power modes 2x-10x")
-                    BulletLine("💎 Unlimited OTP fetches")
-                    BulletLine("🎁 Priority support")
-                }
-            }
+            Text("Bulk Blast is available for premium users only.", fontSize = 13.sp, color = colors.onSurfaceVariant, textAlign = TextAlign.Center)
             Spacer(Modifier.height(20.dp))
-            Text(
-                "Contact admin to upgrade",
-                fontSize = 12.sp,
-                color = colors.onSurfaceVariant,
-            )
+            Text("Contact admin to upgrade", fontSize = 12.sp, color = colors.onSurfaceVariant)
         }
         Spacer(Modifier.height(24.dp))
-        TextButton(onClick = onBack) {
-            Text("← Back", color = colors.onSurfaceVariant)
-        }
+        TextButton(onClick = onBack) { Text("← Back", color = colors.onSurfaceVariant) }
     }
 }
 
@@ -526,9 +378,6 @@ private fun BulletLine(text: String) {
     }
 }
 
-// ============================================================
-//  NUMBERS STEP
-// ============================================================
 @Composable
 private fun NumbersStep(
     numbers: List<String>,
@@ -543,18 +392,9 @@ private fun NumbersStep(
 ) {
     val colors = LocalSanjiColors.current
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            "Step 1 / 3 — Numbers",
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
-            color = colors.onBackground,
-        )
+        Text("Step 1 / 3 — Numbers", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
         Spacer(Modifier.height(4.dp))
-        Text(
-            "Add numbers manually or import from contacts",
-            fontSize = 12.sp,
-            color = colors.onSurfaceVariant,
-        )
+        Text("Add numbers manually or import from contacts", fontSize = 12.sp, color = colors.onSurfaceVariant)
         Spacer(Modifier.height(16.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -571,10 +411,7 @@ private fun NumbersStep(
                 enabled = manualInput.isNotBlank(),
                 modifier = Modifier.height(56.dp),
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colors.primary,
-                    contentColor = Color.Black,
-                ),
+                colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
             ) { Text("Add", fontWeight = FontWeight.Bold) }
         }
 
@@ -588,18 +425,9 @@ private fun NumbersStep(
                 modifier = Modifier.weight(1f),
                 enabled = !loading,
             ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                ) {
-                    if (loading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = colors.primary,
-                        )
-                    } else {
+                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    if (loading) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = colors.primary)
+                    else {
                         Icon(Icons.Default.Contacts, null, tint = colors.primary, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Pick from contacts", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
@@ -612,10 +440,7 @@ private fun NumbersStep(
                     shape = RoundedCornerShape(12.dp),
                     color = colors.error.copy(alpha = 0.15f),
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
+                    Row(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Delete, null, tint = colors.error, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Clear", fontSize = 12.sp, color = colors.error, fontWeight = FontWeight.SemiBold)
@@ -625,61 +450,20 @@ private fun NumbersStep(
         }
 
         Spacer(Modifier.height(16.dp))
-
-        Text(
-            "📋 ${numbers.size} number${if (numbers.size == 1) "" else "s"} in list",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = colors.primary,
-        )
-
+        Text("📋 ${numbers.size} number${if (numbers.size == 1) "" else "s"} in list", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.primary)
         Spacer(Modifier.height(8.dp))
 
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = colors.surface,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(
-                modifier = Modifier
-                    .height(200.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(12.dp),
-            ) {
+        Surface(shape = RoundedCornerShape(12.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.height(200.dp).verticalScroll(rememberScrollState()).padding(12.dp)) {
                 if (numbers.isEmpty()) {
-                    Text(
-                        "No numbers yet",
-                        fontSize = 12.sp,
-                        color = colors.onSurfaceVariant,
-                    )
+                    Text("No numbers yet", fontSize = 12.sp, color = colors.onSurfaceVariant)
                 } else {
                     numbers.forEachIndexed { idx, num ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                "${idx + 1}. ",
-                                fontSize = 11.sp,
-                                color = colors.onSurfaceVariant,
-                            )
-                            Text(
-                                num,
-                                fontSize = 12.sp,
-                                color = colors.onBackground,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.weight(1f),
-                            )
-                            IconButton(
-                                onClick = { onRemove(idx) },
-                                modifier = Modifier.size(24.dp),
-                            ) {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    "Remove",
-                                    tint = colors.error,
-                                    modifier = Modifier.size(16.dp),
-                                )
+                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("${idx + 1}. ", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                            Text(num, fontSize = 12.sp, color = colors.onBackground, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { onRemove(idx) }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Delete, "Remove", tint = colors.error, modifier = Modifier.size(16.dp))
                             }
                         }
                     }
@@ -694,26 +478,13 @@ private fun NumbersStep(
             enabled = numbers.size >= FirebaseConfig.BULK_MIN_NUMBERS,
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = colors.primary,
-                contentColor = Color.Black,
-            ),
-        ) {
-            Text("Next →", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-        }
+            colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
+        ) { Text("Next →", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
     }
 }
 
-// ============================================================
-//  MESSAGE STEP
-// ============================================================
 @Composable
-private fun MessageStep(
-    message: String,
-    onChange: (String) -> Unit,
-    onNext: () -> Unit,
-    onBack: () -> Unit,
-) {
+private fun MessageStep(message: String, onChange: (String) -> Unit, onNext: () -> Unit, onBack: () -> Unit) {
     val colors = LocalSanjiColors.current
     Column(modifier = Modifier.fillMaxWidth()) {
         Text("Step 2 / 3 — Message", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
@@ -735,21 +506,13 @@ private fun MessageStep(
             enabled = message.isNotBlank(),
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = colors.primary,
-                contentColor = Color.Black,
-            ),
+            colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
         ) { Text("Next →", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
         Spacer(Modifier.height(8.dp))
-        TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-            Text("← Back", color = colors.onSurfaceVariant)
-        }
+        TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("← Back", color = colors.onSurfaceVariant) }
     }
 }
 
-// ============================================================
-//  CONFIG STEP
-// ============================================================
 @Composable
 private fun ConfigStep(
     perNumberText: String,
@@ -771,7 +534,6 @@ private fun ConfigStep(
         Text("Step 3 / 3 — Config", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
         Spacer(Modifier.height(4.dp))
         Text("$numbersCount numbers in list", fontSize = 12.sp, color = colors.onSurfaceVariant)
-
         Spacer(Modifier.height(16.dp))
 
         Text("Count per number", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
@@ -786,7 +548,6 @@ private fun ConfigStep(
         )
 
         Spacer(Modifier.height(16.dp))
-
         Text("Speed", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
         Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -797,43 +558,29 @@ private fun ConfigStep(
                     color = if (speed == s) colors.primary.copy(alpha = 0.15f) else colors.surface,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(
-                            s.label,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (speed == s) colors.primary else colors.onBackground,
-                        )
+                    Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(s.label, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (speed == s) colors.primary else colors.onBackground)
                     }
                 }
             }
         }
 
-        Spacer(Modifier.height(16.dp))
-
-        Text("Power mode", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            FirebaseConfig.ALLOWED_POWER_MODES.forEach { mode ->
-                Surface(
-                    onClick = { onPowerChange(mode) },
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (power == mode) colors.primary.copy(alpha = 0.15f) else colors.surface,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
+        // power selector — admin only
+        if (isAdmin) {
+            Spacer(Modifier.height(16.dp))
+            Text("Power mode (admin only)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FirebaseConfig.ALLOWED_POWER_MODES.forEach { mode ->
+                    Surface(
+                        onClick = { onPowerChange(mode) },
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (power == mode) colors.primary.copy(alpha = 0.15f) else colors.surface,
+                        modifier = Modifier.weight(1f),
                     ) {
-                        Text(
-                            "${mode}x",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Black,
-                            color = if (power == mode) colors.primary else colors.onBackground,
-                        )
+                        Column(modifier = Modifier.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("${mode}x", fontSize = 14.sp, fontWeight = FontWeight.Black, color = if (power == mode) colors.primary else colors.onBackground)
+                        }
                     }
                 }
             }
@@ -841,23 +588,14 @@ private fun ConfigStep(
 
         Spacer(Modifier.height(20.dp))
 
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = colors.surface,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp)) {
                 if (estimate != null) {
-                    Text(
-                        "📊 Cost estimate",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colors.primary,
-                    )
+                    Text("📊 Cost estimate", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.primary)
                     Spacer(Modifier.height(8.dp))
                     EstRow("Numbers", "${estimate.numbersCount}")
                     EstRow("Per number", "${estimate.perNumberCount}")
-                    EstRow("Power", "${estimate.power}x")
+                    if (isAdmin) EstRow("Power", "${estimate.power}x")
                     EstRow("Total SMS", "${estimate.totalSms}")
                     EstRow("Total credits", "${estimate.totalCredits}")
                     EstRow("Your credits", "$credits", highlight = !isAdmin && !estimate.affordable)
@@ -865,105 +603,53 @@ private fun ConfigStep(
                         Spacer(Modifier.height(4.dp))
                         Text(
                             "❌ Not affordable — max ${estimate.maxAffordable} numbers with current credits",
-                            fontSize = 11.sp,
-                            color = colors.error,
+                            fontSize = 11.sp, color = colors.error,
                         )
                     }
                 } else {
-                    Text(
-                        "Tap 'Estimate Cost' to see total credits needed",
-                        fontSize = 11.sp,
-                        color = colors.onSurfaceVariant,
-                    )
+                    Text("Tap 'Estimate Cost' to see total credits needed", fontSize = 11.sp, color = colors.onSurfaceVariant)
                 }
             }
         }
 
         Spacer(Modifier.height(16.dp))
-
-        TextButton(
-            onClick = onEstimate,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        TextButton(onClick = onEstimate, modifier = Modifier.fillMaxWidth()) {
             Text("Estimate Cost", color = colors.primary, fontWeight = FontWeight.SemiBold)
         }
-
         Spacer(Modifier.height(8.dp))
-
         Button(
             onClick = onStart,
             enabled = estimate != null && (isAdmin || estimate.affordable),
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = colors.primary,
-                contentColor = Color.Black,
-            ),
-        ) {
-            Text("START BULK BLAST 🚀", fontWeight = FontWeight.Black, fontSize = 15.sp)
-        }
-
+            colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
+        ) { Text("START BULK BLAST 🚀", fontWeight = FontWeight.Black, fontSize = 15.sp) }
         Spacer(Modifier.height(8.dp))
-        TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-            Text("← Back", color = colors.onSurfaceVariant)
-        }
+        TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("← Back", color = colors.onSurfaceVariant) }
     }
 }
 
 @Composable
 private fun EstRow(label: String, value: String, highlight: Boolean = false) {
     val colors = LocalSanjiColors.current
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, fontSize = 11.sp, color = colors.onSurfaceVariant)
-        Text(
-            value,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = if (highlight) colors.error else colors.onBackground,
-        )
+        Text(value, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = if (highlight) colors.error else colors.onBackground)
     }
 }
 
-// ============================================================
-//  EXECUTE STEP
-// ============================================================
 @Composable
-private fun ExecuteStep(
-    progressIndex: Int,
-    totalNumbers: Int,
-    sent: Int,
-    failed: Int,
-    onStop: () -> Unit,
-) {
+private fun ExecuteStep(progressIndex: Int, totalNumbers: Int, sent: Int, failed: Int, onStop: () -> Unit) {
     val colors = LocalSanjiColors.current
     val progress = if (totalNumbers > 0) progressIndex.toFloat() / totalNumbers else 0f
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(20.dp))
         Text("BULK BLASTING…", fontSize = 20.sp, fontWeight = FontWeight.Black, color = colors.primary)
         Spacer(Modifier.height(20.dp))
-
-        LinearProgressIndicator(
-            progress = { progress },
-            color = colors.primary,
-            trackColor = colors.surface,
-            modifier = Modifier.fillMaxWidth().height(10.dp),
-        )
+        LinearProgressIndicator(progress = { progress }, color = colors.primary, trackColor = colors.surface, modifier = Modifier.fillMaxWidth().height(10.dp))
         Spacer(Modifier.height(8.dp))
-        Text(
-            "Number $progressIndex of $totalNumbers",
-            fontSize = 12.sp,
-            color = colors.onSurfaceVariant,
-        )
-
+        Text("Number $progressIndex of $totalNumbers", fontSize = 12.sp, color = colors.onSurfaceVariant)
         Spacer(Modifier.height(20.dp))
-
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("$sent", fontSize = 24.sp, fontWeight = FontWeight.Black, color = colors.success)
@@ -974,9 +660,7 @@ private fun ExecuteStep(
                 Text("FAILED", fontSize = 11.sp, color = colors.onSurfaceVariant)
             }
         }
-
         Spacer(Modifier.height(40.dp))
-
         Button(
             onClick = onStop,
             modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -986,22 +670,11 @@ private fun ExecuteStep(
     }
 }
 
-// ============================================================
-//  RESULT STEP
-// ============================================================
 @Composable
-private fun ResultStep(
-    summary: BulkBlastSummary?,
-    isAdmin: Boolean,
-    onDone: () -> Unit,
-) {
+private fun ResultStep(summary: BulkBlastSummary?, isAdmin: Boolean, onDone: () -> Unit) {
     val colors = LocalSanjiColors.current
     val success = summary?.error == null && (summary?.totalFailed ?: 0) == 0
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(20.dp))
         Icon(
             imageVector = if (success) Icons.Default.CheckCircle else Icons.Default.Error,
@@ -1012,28 +685,14 @@ private fun ResultStep(
         Spacer(Modifier.height(16.dp))
         Text(
             text = if (success) "Bulk Blast Complete" else "Bulk Blast Done",
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold,
-            color = colors.onBackground,
+            fontSize = 22.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
         )
-
         if (summary?.error != null) {
             Spacer(Modifier.height(8.dp))
-            Text(
-                summary.error,
-                fontSize = 12.sp,
-                color = colors.error,
-                textAlign = TextAlign.Center,
-            )
+            Text(summary.error, fontSize = 12.sp, color = colors.error, textAlign = TextAlign.Center)
         }
-
         Spacer(Modifier.height(20.dp))
-
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = colors.surface,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp)) {
                 EstRow("Numbers attempted", "${summary?.numbersAttempted ?: 0}")
                 EstRow("Total sent", "${summary?.totalSent ?: 0}")
@@ -1041,25 +700,16 @@ private fun ResultStep(
                 EstRow("Duration", "${summary?.durationSec ?: 0}s")
                 if (summary?.cancelled == true) {
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        "⚠️ Cancelled early",
-                        fontSize = 11.sp,
-                        color = colors.warning,
-                    )
+                    Text("⚠️ Cancelled early", fontSize = 11.sp, color = colors.warning)
                 }
             }
         }
-
         Spacer(Modifier.height(24.dp))
-
         Button(
             onClick = onDone,
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = colors.primary,
-                contentColor = Color.Black,
-            ),
+            colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
         ) { Text("Done", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
     }
 }
