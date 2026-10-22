@@ -21,7 +21,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -49,7 +48,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.data.Giveaway
@@ -347,12 +345,12 @@ private fun GiveawayAdminDetail(
 
         Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp)) {
-                InfoRow("Status", gw.status)
-                InfoRow("Prize", gw.prize)
-                InfoRow("Ends", fmt(gw.endsAt))
-                InfoRow("Participants", "${gw.entries.size}")
-                InfoRow("Winners", "${gw.winnersCount}")
-                InfoRow(
+                AdminInfoRow("Status", gw.status)
+                AdminInfoRow("Prize", gw.prize)
+                AdminInfoRow("Ends", fmt(gw.endsAt))
+                AdminInfoRow("Participants", "${gw.entries.size}")
+                AdminInfoRow("Winners", "${gw.winnersCount}")
+                AdminInfoRow(
                     "Method",
                     when (gw.winnerMethod) {
                         "votes_only" -> "Votes"
@@ -488,5 +486,17 @@ private fun GiveawayAdminDetail(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun AdminInfoRow(label: String, value: String) {
+    val colors = LocalSanjiColors.current
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, fontSize = 11.sp, color = colors.onSurfaceVariant)
+        Text(value, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
     }
 }
