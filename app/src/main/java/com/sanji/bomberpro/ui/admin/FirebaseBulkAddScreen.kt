@@ -1,7 +1,9 @@
 package com.sanji.bomberpro.ui.admin
 
-import android.content.Intent
-import android.net.Uri
+import android.content.ContentValues
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -29,7 +31,6 @@ import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -78,6 +79,7 @@ fun FirebaseBulkAddScreen(
     var progressTotal by remember { mutableStateOf(0) }
     var progressAdded by remember { mutableStateOf(0) }
     var result by remember { mutableStateOf<ImportResult?>(null) }
+    var exportStatus by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
     suspend fun runImport(block: suspend () -> Result<ImportResult>) {
@@ -88,6 +90,7 @@ fun FirebaseBulkAddScreen(
         progressAdded = 0
         error = null
         result = null
+        exportStatus = null
         try {
             val res = block()
             if (res.isSuccess) {
@@ -105,7 +108,7 @@ fun FirebaseBulkAddScreen(
 
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
-    ) { uri: Uri? ->
+    ) { uri ->
         if (uri != null) {
             scope.launch {
                 runImport {
@@ -158,7 +161,7 @@ fun FirebaseBulkAddScreen(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Supports: .txt, .json, .csv, .html, .log — any text containing URLs",
+                    "Supports .txt, .json, .csv, .html, .log — any text containing URLs",
                     fontSize = 11.sp,
                     color = colors.onSurfaceVariant,
                 )
@@ -166,7 +169,6 @@ fun FirebaseBulkAddScreen(
                 Spacer(Modifier.height(16.dp))
 
                 if (!processing && result == null) {
-                    // file upload card
                     Surface(
                         onClick = { filePicker.launch("*/*") },
                         shape = RoundedCornerShape(14.dp),
@@ -201,7 +203,6 @@ fun FirebaseBulkAddScreen(
 
                     Spacer(Modifier.height(10.dp))
 
-                    // paste card
                     Surface(
                         onClick = { showPasteDialog = true },
                         shape = RoundedCornerShape(14.dp),
@@ -236,28 +237,44 @@ fun FirebaseBulkAddScreen(
 
                     Spacer(Modifier.height(10.dp))
 
-                    // export card
                     Surface(
                         onClick = {
                             scope.launch {
+                                exportStatus = null
+                                error = null
                                 val res = service.exportFirebases()
                                 if (res.isSuccess) {
                                     val json = res.getOrNull() ?: ""
                                     val filename = "firebases_export_${System.currentTimeMillis()}.json"
-                                    val file = File(context.cacheDir, filename)
-                                    file.writeText(json)
-                                    val share = Intent(Intent.ACTION_SEND).apply {
-                                        type = "application/json"
-                                        putExtra(Intent.EXTRA_STREAM, androidx.core.content.FileProvider.getUriForFile(
-                                            context,
-                                            "${context.packageName}.fileprovider",
-                                            file,
-                                        ))
-                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    try {
+                                        val values = ContentValues().apply {
+                                            put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                                            put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                                put(
+                                                    MediaStore.MediaColumns.RELATIVE_PATH,
+                                                    Environment.DIRECTORY_DOWNLOADS,
+                                                )
+                                            }
+                                        }
+                                        val uri = context.contentResolver.insert(
+                                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                                        ) ?: throw Exception("MediaStore insert failed")
+                                        context.contentResolver.openOutputStream(uri)?.use {
+                                            it.write(json.toByteArray())
+                                        }
+                                        exportStatus = "Saved to Downloads/$filename"
+                                    } catch (e: Exception) {
+                                        try {
+                                            val file = File(context.filesDir, filename)
+                                            file.writeText(json)
+                                            exportStatus = "Saved to app storage/$filename"
+                                        } catch (_: Exception) {
+                                            error = "Export failed: ${e.message}"
+                                        }
                                     }
-                                    context.startActivity(Intent.createChooser(share, "Export firebases"))
                                 } else {
-                                    error = res.exceptionOrNull()?.message
+                                    error = res.exceptionOrNull()?.message ?: "Export failed"
                                 }
                             }
                         },
@@ -290,9 +307,19 @@ fun FirebaseBulkAddScreen(
                             }
                         }
                     }
+
+                    if (exportStatus != null) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            exportStatus!!,
+                            color = colors.success,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
 
-                // progress
                 if (processing) {
                     Spacer(Modifier.height(20.dp))
                     Surface(
@@ -337,7 +364,6 @@ fun FirebaseBulkAddScreen(
                     }
                 }
 
-                // result
                 if (result != null) {
                     val r = result!!
                     Spacer(Modifier.height(16.dp))
@@ -367,7 +393,11 @@ fun FirebaseBulkAddScreen(
                             ResultRow("✅ Added", "${r.added}", colors.success)
                             ResultRow("⏭ Already exists", "${r.skippedExisting}")
                             ResultRow("⏭ Duplicate in batch", "${r.skippedDuplicate}")
-                            ResultRow("❌ Failed", "${r.failed}", if (r.failed > 0) colors.error else colors.onBackground)
+                            ResultRow(
+                                "❌ Failed",
+                                "${r.failed}",
+                                if (r.failed > 0) colors.error else colors.onBackground,
+                            )
                             ResultRow("🔥 Total now", "${r.existingAfter}", colors.primary)
 
                             if (r.failureSummary.isNotBlank()) {
@@ -394,6 +424,7 @@ fun FirebaseBulkAddScreen(
                         onClick = {
                             result = null
                             error = null
+                            exportStatus = null
                             progressCurrent = 0
                             progressTotal = 0
                             progressAdded = 0
@@ -429,7 +460,6 @@ fun FirebaseBulkAddScreen(
         }
     }
 
-    // paste dialog
     if (showPasteDialog) {
         AlertDialog(
             onDismissRequest = { showPasteDialog = false },
