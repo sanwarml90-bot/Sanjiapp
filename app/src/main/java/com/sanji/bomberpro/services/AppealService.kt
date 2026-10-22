@@ -1,7 +1,6 @@
 package com.sanji.bomberpro.services
 
 import android.util.Log
-import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.sanji.bomberpro.FirebaseConfig
@@ -9,7 +8,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
-data class Appeal(
+/**
+ * Renamed to AppealRecord to avoid collision with SupportService.Appeal
+ * (legacy data class used by support ticket admin screen).
+ */
+data class AppealRecord(
     val id: String = "",
     val uid: String = "",
     val userName: String = "",
@@ -40,7 +43,6 @@ class AppealService {
         try {
             if (text.isBlank()) return@withContext Result.failure(Exception("Appeal text required"))
 
-            // check existing open appeal
             val existing = db.collection(FirebaseConfig.COL_APPEALS)
                 .whereEqualTo("uid", uid)
                 .whereEqualTo("status", "open")
@@ -75,9 +77,9 @@ class AppealService {
     }
 
     // ============================================================
-    //  LIST — user's own appeals
+    //  LIST — user's own
     // ============================================================
-    suspend fun listUserAppeals(uid: String, limit: Long = 20): List<Appeal> =
+    suspend fun listUserAppeals(uid: String, limit: Long = 20): List<AppealRecord> =
         withContext(Dispatchers.IO) {
             try {
                 db.collection(FirebaseConfig.COL_APPEALS)
@@ -95,24 +97,25 @@ class AppealService {
     // ============================================================
     //  LIST — open appeals (admin)
     // ============================================================
-    suspend fun listOpenAppeals(limit: Long = 100): List<Appeal> = withContext(Dispatchers.IO) {
-        try {
-            db.collection(FirebaseConfig.COL_APPEALS)
-                .whereEqualTo("status", "open")
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(limit)
-                .get().await()
-                .documents.mapNotNull { parse(it.id, it.data ?: emptyMap()) }
-        } catch (e: Exception) {
-            Log.w(TAG, "listOpenAppeals failed", e)
-            emptyList()
+    suspend fun listOpenAppeals(limit: Long = 100): List<AppealRecord> =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_APPEALS)
+                    .whereEqualTo("status", "open")
+                    .orderBy("createdAt", Query.Direction.DESCENDING)
+                    .limit(limit)
+                    .get().await()
+                    .documents.mapNotNull { parse(it.id, it.data ?: emptyMap()) }
+            } catch (e: Exception) {
+                Log.w(TAG, "listOpenAppeals failed", e)
+                emptyList()
+            }
         }
-    }
 
     // ============================================================
     //  GET one
     // ============================================================
-    suspend fun getAppeal(id: String): Appeal? = withContext(Dispatchers.IO) {
+    suspend fun getAppeal(id: String): AppealRecord? = withContext(Dispatchers.IO) {
         try {
             val snap = db.collection(FirebaseConfig.COL_APPEALS).document(id).get().await()
             if (!snap.exists()) return@withContext null
@@ -123,7 +126,7 @@ class AppealService {
     }
 
     // ============================================================
-    //  RESOLVE — accept appeal (admin unban)
+    //  RESOLVE — accept appeal (unban user)
     // ============================================================
     suspend fun resolveAppeal(
         appealId: String,
@@ -158,7 +161,6 @@ class AppealService {
                 }
             }.await()
 
-            // audit
             try {
                 db.collection(FirebaseConfig.COL_AUDIT_LOG).add(
                     mapOf(
@@ -180,7 +182,7 @@ class AppealService {
     }
 
     // ============================================================
-    //  REJECT — keep ban
+    //  REJECT
     // ============================================================
     suspend fun rejectAppeal(
         appealId: String,
@@ -205,7 +207,7 @@ class AppealService {
     }
 
     // ============================================================
-    //  CLOSE — mark stale
+    //  CLOSE
     // ============================================================
     suspend fun closeAppeal(appealId: String, adminUid: String): Boolean =
         withContext(Dispatchers.IO) {
@@ -227,9 +229,9 @@ class AppealService {
     // ============================================================
     //  PARSE
     // ============================================================
-    private fun parse(id: String, map: Map<String, Any?>): Appeal? {
+    private fun parse(id: String, map: Map<String, Any?>): AppealRecord? {
         if (map.isEmpty()) return null
-        return Appeal(
+        return AppealRecord(
             id = id,
             uid = map["uid"] as? String ?: "",
             userName = map["userName"] as? String ?: "",
