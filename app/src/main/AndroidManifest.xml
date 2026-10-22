@@ -7,7 +7,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Storage for data export/import (Android 9 and below) -->
+    <!-- Storage for data export/import -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"
         tools:ignore="ScopedStorage" />
@@ -16,6 +16,12 @@
 
     <!-- Biometric -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
+    <!-- Device info — SIM detection for verification -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
 
     <!-- Foreground service for long-running blasts -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -47,7 +53,6 @@
             </intent-filter>
         </activity>
 
-        <!-- FCM service -->
         <service
             android:name=".notifications.SanjiFcmService"
             android:exported="false">
@@ -56,7 +61,6 @@
             </intent-filter>
         </service>
 
-        <!-- Default FCM notification channel -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="sanji_default_channel" />
@@ -64,7 +68,6 @@
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@drawable/ic_notification" />
 
-        <!-- WorkManager for blast worker -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
