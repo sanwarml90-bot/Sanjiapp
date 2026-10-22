@@ -1,10 +1,8 @@
 package com.sanji.bomberpro.services
 
 import android.util.Log
-import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
-import com.google.firebase.firestore.SetOptions
 import com.sanji.bomberpro.FirebaseConfig
 import com.sanji.bomberpro.data.Giveaway
 import com.sanji.bomberpro.data.GiveawayEntry
@@ -94,7 +92,6 @@ class GiveawayService {
                 )
             ).await()
 
-            // queue announcement for bot to post to channel
             try {
                 val annRef = db.collection("giveaway_announce_requests").document()
                 annRef.set(
@@ -116,7 +113,6 @@ class GiveawayService {
                 ref.update("announcementRequested", true).await()
             } catch (_: Exception) {}
 
-            // audit
             try {
                 db.collection(FirebaseConfig.COL_AUDIT_LOG).add(
                     mapOf(
@@ -182,7 +178,7 @@ class GiveawayService {
     }
 
     // ============================================================
-    //  ENTER — check requirements, add entry, distribute participation
+    //  ENTER
     // ============================================================
     suspend fun enterGiveaway(
         gwId: String,
@@ -221,7 +217,6 @@ class GiveawayService {
                 return@withContext Result.failure(Exception("Account must be ${req.minDays} days old"))
             }
 
-            // atomic entry write
             val now = System.currentTimeMillis() / 1000L
             val entryRef = db.collection(FirebaseConfig.COL_GIVEAWAYS).document(gwId)
             db.runTransaction { txn ->
@@ -243,7 +238,6 @@ class GiveawayService {
                 )
             }.await()
 
-            // participation reward
             if (gw.participationReward.enabled && !gw.participationReward.distributed) {
                 try {
                     val cr = gw.participationReward.credits
@@ -253,7 +247,6 @@ class GiveawayService {
                 } catch (_: Exception) {}
             }
 
-            // notification
             try {
                 val notifRef = db.collection(FirebaseConfig.COL_NOTIFICATIONS).document()
                 notifRef.set(
@@ -270,8 +263,11 @@ class GiveawayService {
             } catch (_: Exception) {}
 
             val updated = getGiveaway(gwId)
-                ?: return@withContext Result.failure(Exception("Entered but failed to reload"))
-            Result.success(updated)
+            if (updated == null) {
+                Result.failure(Exception("Entered but failed to reload"))
+            } else {
+                Result.success(updated)
+            }
         } catch (e: Exception) {
             if (e.message?.contains("ALREADY_ENTERED", true) == true) {
                 Result.failure(Exception("Already entered"))
@@ -283,7 +279,7 @@ class GiveawayService {
     }
 
     // ============================================================
-    //  ADJUST VOTES (admin, anonymous)
+    //  ADJUST VOTES
     // ============================================================
     suspend fun adjustVotes(
         gwId: String,
@@ -312,7 +308,6 @@ class GiveawayService {
                 txn.update(gwRef, "entries.$targetUid.$field", current + absDelta)
             }.await()
 
-            // log
             val logRef = db.collection("giveaway_vote_logs").document()
             logRef.set(
                 mapOf(
@@ -337,9 +332,8 @@ class GiveawayService {
     //  LEADERBOARD
     // ============================================================
     suspend fun computeLeaderboard(gw: Giveaway): List<LeaderboardRow> = withContext(Dispatchers.IO) {
-        if (gw.entries.isEmpty()) return@withContext emptyList()
+        if (gw.entries.isEmpty()) return@withContext emptyList<LeaderboardRow>()
 
-        // fetch refs for each entry (small numbers)
         val rows = mutableListOf<LeaderboardRow>()
         for ((uid, entry) in gw.entries) {
             val refCount = try { userData.getReferralCount(uid) } catch (_: Exception) { 0 }
@@ -360,16 +354,16 @@ class GiveawayService {
             )
         }
         val sorted = rows.sortedWith(
-            compareByDescending<LeaderboardRow> { it.score }
-                .thenByDescending { it.votes }
-                .thenByDescending { it.refs }
-                .thenBy { it.uid }
+            compareByDescending<LeaderboardRow> { row -> row.score }
+                .thenByDescending { row -> row.votes }
+                .thenByDescending { row -> row.refs }
+                .thenBy { row -> row.uid }
         )
         sorted.mapIndexed { i, r -> r.copy(rank = i + 1) }
     }
 
     // ============================================================
-    //  END — compute winners, distribute prizes, mark ended
+    //  END
     // ============================================================
     suspend fun endGiveaway(
         gwId: String,
@@ -412,7 +406,6 @@ class GiveawayService {
                     } catch (_: Exception) {}
                 }
 
-                // DM winner via notification
                 try {
                     val notifRef = db.collection(FirebaseConfig.COL_NOTIFICATIONS).document()
                     notifRef.set(
@@ -439,7 +432,6 @@ class GiveawayService {
                 )
             }
 
-            // distribute participation if not yet
             if (gw.participationReward.enabled && !gw.participationReward.distributed) {
                 for ((uid, _) in gw.entries) {
                     try {
@@ -474,7 +466,6 @@ class GiveawayService {
                 "participationReward.distributed", true,
             ).await()
 
-            // queue channel end-post request for bot
             if (requestChannelPost) {
                 try {
                     val annRef = db.collection("giveaway_announce_requests").document()
@@ -505,7 +496,6 @@ class GiveawayService {
                 } catch (_: Exception) {}
             }
 
-            // audit
             try {
                 db.collection(FirebaseConfig.COL_AUDIT_LOG).add(
                     mapOf(
@@ -519,8 +509,12 @@ class GiveawayService {
                 ).await()
             } catch (_: Exception) {}
 
-            getGiveaway(gwId) ?: Result.failure<Giveaway>(Exception("Ended but reload failed")).getOrNull()
-                ?: return@withContext Result.failure(Exception("Reload failed"))
+            val reloaded = getGiveaway(gwId)
+            if (reloaded == null) {
+                Result.failure(Exception("Reload failed"))
+            } else {
+                Result.success(reloaded)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "endGiveaway failed", e)
             Result.failure(e)
@@ -584,10 +578,10 @@ class GiveawayService {
         val rawPrizeConfig = map["prizeConfig"] as? Map<*, *> ?: emptyMap<Any, Any>()
 
         val entries = rawEntries.entries.mapNotNull { (k, v) ->
-            val uid = k.toString()
+            val entryUid = k.toString()
             val em = v as? Map<*, *> ?: return@mapNotNull null
-            uid to GiveawayEntry(
-                uid = uid,
+            entryUid to GiveawayEntry(
+                uid = entryUid,
                 name = em["name"] as? String ?: "User",
                 enteredAt = (em["enteredAt"] as? Number)?.toLong() ?: 0L,
                 bonusVotes = (em["bonusVotes"] as? Number)?.toInt() ?: 0,
