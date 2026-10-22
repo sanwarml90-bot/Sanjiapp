@@ -9,7 +9,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.tasks.await
@@ -17,6 +16,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 data class ImportResult(
@@ -27,6 +27,13 @@ data class ImportResult(
     val failureSummary: String,
     val totalUrls: Int,
     val existingAfter: Int,
+    val failures: List<Pair<String, String>> = emptyList(),
+)
+
+data class ValidationResult(
+    val valid: List<String>,
+    val failed: List<Pair<String, String>>,
+    val cancelled: Boolean = false,
 )
 
 class FirebaseImportService {
@@ -37,8 +44,7 @@ class FirebaseImportService {
         .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
-    // bot _URL_REGEX = https?://[^\s<>"')\]}\]+
-    private val urlRegex = Regex("""https?://[^\s<>"')\]}\]+""")
+    private val defaultUrlRegex = Regex("""https?://[^\s<>"')\]}\]+""")
 
     private val excludedHosts = listOf(
         "t.me", "telegram", "github.com", "githubusercontent",
@@ -46,106 +52,121 @@ class FirebaseImportService {
     )
 
     // ============================================================
-    //  IMPORT — from Uri (file picker)
+    //  EXTRACT
     // ============================================================
-    suspend fun importFromUri(
-        adminUid: String,
+    fun extractUrls(text: String, customPattern: String? = null): List<String> {
+        val regex = try {
+            if (!customPattern.isNullOrBlank()) Regex(customPattern) else defaultUrlRegex
+        } catch (_: Exception) {
+            defaultUrlRegex
+        }
+        val matches = regex.findAll(text)
+        val seen = HashSet<String>()
+        val out = mutableListOf<String>()
+        for (m in matches) {
+            var u = m.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}', '"', '\'')
+            if (u.isBlank()) continue
+            try {
+                val host = Uri.parse(u).host?.lowercase() ?: continue
+                if (excludedHosts.any { host.contains(it) }) continue
+            } catch (_: Exception) {
+                continue
+            }
+            if (u in seen) continue
+            seen.add(u)
+            out.add(u)
+        }
+        return out
+    }
+
+    // ============================================================
+    //  READ URI
+    // ============================================================
+    suspend fun readUriText(
         uri: Uri,
         contentResolver: ContentResolver,
-        onProgress: suspend (phase: String, current: Int, total: Int, added: Int) -> Unit = { _, _, _, _ -> },
-    ): Result<ImportResult> = withContext(Dispatchers.IO) {
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val text = try {
-                contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                    ?: return@withContext Result.failure(Exception("Cannot open file"))
-            } catch (e: Exception) {
-                return@withContext Result.failure(Exception("Read failed: ${e.message}"))
-            }
-
+            val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                ?: return@withContext Result.failure(Exception("Cannot open file"))
             if (text.length > 50 * 1024 * 1024) {
                 return@withContext Result.failure(Exception("File too large (>50MB)"))
             }
-
-            importFromText(adminUid, text, onProgress)
+            Result.success(text)
         } catch (e: Exception) {
-            Log.e(TAG, "importFromUri failed", e)
-            Result.failure(e)
+            Result.failure(Exception("Read failed: ${e.message}"))
         }
     }
 
     // ============================================================
-    //  IMPORT — from raw text
+    //  VALIDATE — separate step, cancelable
     // ============================================================
-    suspend fun importFromText(
-        adminUid: String,
-        text: String,
-        onProgress: suspend (phase: String, current: Int, total: Int, added: Int) -> Unit = { _, _, _, _ -> },
-    ): Result<ImportResult> = withContext(Dispatchers.IO) {
-        try {
-            onProgress("extracting", 0, 0, 0)
-            val urls = extractUrls(text).distinct()
-            if (urls.isEmpty()) {
-                return@withContext Result.failure(Exception("No URLs found in input"))
-            }
+    suspend fun validateUrls(
+        urls: List<String>,
+        existingUrls: Set<String>,
+        cancel: AtomicBoolean,
+        onProgress: suspend (current: Int, total: Int, valid: Int, failed: Int) -> Unit,
+    ): ValidationResult = withContext(Dispatchers.IO) {
+        val toCheck = urls.filter { it.trimEnd('/') !in existingUrls }
+        if (toCheck.isEmpty()) {
+            return@withContext ValidationResult(valid = emptyList(), failed = emptyList())
+        }
+        val valid = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val failed = java.util.Collections.synchronizedList(mutableListOf<Pair<String, String>>())
+        val counter = AtomicInteger(0)
+        val sem = Semaphore(30)
 
-            // load existing
-            onProgress("loading", 0, urls.size, 0)
-            val existingSnap = db.collection(FirebaseConfig.COL_FIREBASES).get().await()
-            val existing = existingSnap.documents.mapNotNull {
-                it.getString("url")?.trimEnd('/')
-            }.toSet()
-
-            val toCheck = urls.filter { it.trimEnd('/') !in existing }
-            val skippedExisting = urls.size - toCheck.size
-
-            if (toCheck.isEmpty()) {
-                return@withContext Result.success(
-                    ImportResult(
-                        added = 0,
-                        skippedExisting = skippedExisting,
-                        skippedDuplicate = 0,
-                        failed = 0,
-                        failureSummary = "",
-                        totalUrls = urls.size,
-                        existingAfter = existing.size,
-                    )
-                )
-            }
-
-            // validate in parallel (30 concurrent — matches bot)
-            onProgress("validating", 0, toCheck.size, 0)
-            val valid = mutableListOf<String>()
-            val failureReasons = mutableMapOf<String, Int>()
-            val counter = AtomicInteger(0)
-            val sem = Semaphore(30)
-
-            coroutineScope {
-                toCheck.map { url ->
-                    async {
-                        sem.withPermit {
-                            val res = checkFirebaseUrl(url)
-                            if (res.isSuccess) valid.add(url.trimEnd('/'))
-                            else {
-                                val reason = categorizeFailure(res.exceptionOrNull()?.message ?: "unknown")
-                                synchronized(failureReasons) {
-                                    failureReasons[reason] = (failureReasons[reason] ?: 0) + 1
-                                }
-                            }
-                            val c = counter.incrementAndGet()
-                            if (c % 5 == 0 || c == toCheck.size) {
-                                onProgress("validating", c, toCheck.size, valid.size)
-                            }
+        coroutineScope {
+            toCheck.map { url ->
+                async {
+                    if (cancel.get()) return@async
+                    sem.withPermit {
+                        if (cancel.get()) return@withPermit
+                        val res = checkFirebaseUrl(url)
+                        if (res.isSuccess) valid.add(url.trimEnd('/'))
+                        else failed.add(url to categorizeFailure(res.exceptionOrNull()?.message ?: "unknown"))
+                        val c = counter.incrementAndGet()
+                        if (c % 5 == 0 || c == toCheck.size) {
+                            onProgress(c, toCheck.size, valid.size, failed.size)
                         }
                     }
-                }.awaitAll()
-            }
+                }
+            }.awaitAll()
+        }
 
-            // insert valid — dedupe locally again (race-safe)
-            onProgress("inserting", 0, valid.size, 0)
-            val uniqueValid = valid.toSet().toList()
-            val batch = db.batch()
+        ValidationResult(
+            valid = valid.toList(),
+            failed = failed.toList(),
+            cancelled = cancel.get(),
+        )
+    }
+
+    // ============================================================
+    //  LOAD EXISTING
+    // ============================================================
+    suspend fun loadExistingUrls(): Set<String> = withContext(Dispatchers.IO) {
+        try {
+            db.collection(FirebaseConfig.COL_FIREBASES).get().await()
+                .documents.mapNotNull { it.getString("url")?.trimEnd('/') }
+                .toSet()
+        } catch (_: Exception) {
+            emptySet()
+        }
+    }
+
+    // ============================================================
+    //  INSERT
+    // ============================================================
+    suspend fun insertValidated(
+        adminUid: String,
+        validUrls: List<String>,
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val unique = validUrls.toSet().toList()
             var inserted = 0
-            for (url in uniqueValid) {
+            var batch = db.batch()
+            var inBatch = 0
+            for (url in unique) {
                 val id = generateFirebaseId()
                 val ref = db.collection(FirebaseConfig.COL_FIREBASES).document(id)
                 val label = try {
@@ -164,16 +185,15 @@ class FirebaseImportService {
                     )
                 )
                 inserted++
-                if (inserted % 400 == 0) {
+                inBatch++
+                if (inBatch >= 400) {
                     batch.commit().await()
+                    batch = db.batch()
+                    inBatch = 0
                 }
             }
-            if (inserted % 400 != 0) batch.commit().await()
+            if (inBatch > 0) batch.commit().await()
 
-            // final count
-            val finalCount = existingSnap.size() + inserted
-
-            // audit
             try {
                 db.collection(FirebaseConfig.COL_AUDIT_LOG).add(
                     mapOf(
@@ -181,46 +201,86 @@ class FirebaseImportService {
                         "action" to "fb_bulk_import",
                         "targetUid" to "",
                         "amount" to 0L,
-                        "reason" to "added=$inserted skipped=${skippedExisting + (valid.size - inserted)} failed=${toCheck.size - valid.size}",
+                        "reason" to "added=$inserted",
                         "ts" to System.currentTimeMillis() / 1000L,
                     )
                 ).await()
             } catch (_: Exception) {}
 
-            val failureSummary = failureReasons.entries
-                .sortedByDescending { it.value }
-                .joinToString(" · ") { "${it.key}: ${it.value}" }
-
-            onProgress("done", toCheck.size, toCheck.size, inserted)
-
-            Result.success(
-                ImportResult(
-                    added = inserted,
-                    skippedExisting = skippedExisting,
-                    skippedDuplicate = valid.size - inserted,
-                    failed = toCheck.size - valid.size,
-                    failureSummary = failureSummary,
-                    totalUrls = urls.size,
-                    existingAfter = finalCount,
-                )
-            )
+            Result.success(inserted)
         } catch (e: Exception) {
-            Log.e(TAG, "importFromText failed", e)
+            Log.e(TAG, "insertValidated failed", e)
             Result.failure(e)
         }
     }
 
     // ============================================================
-    //  VALIDATE — GET {url}/clients.json?shallow=true
+    //  EXPORT
+    // ============================================================
+    suspend fun exportJson(): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val snap = db.collection(FirebaseConfig.COL_FIREBASES).orderBy("addedAt").get().await()
+            val list = snap.documents.mapIndexed { i, d ->
+                val url = d.getString("url") ?: ""
+                val label = d.getString("label") ?: ""
+                val addedAt = d.getLong("addedAt") ?: 0L
+                """    {"index": ${i + 1}, "id": "${esc(d.id)}", "url": "${esc(url)}", "label": "${esc(label)}", "added_at": $addedAt}"""
+            }
+            val json = buildString {
+                appendLine("{")
+                appendLine("  \"version\": \"app-1.0\",")
+                appendLine("  \"exported_at\": ${System.currentTimeMillis() / 1000L},")
+                appendLine("  \"total\": ${list.size},")
+                appendLine("  \"firebases\": [")
+                list.forEachIndexed { i, line ->
+                    append(line)
+                    if (i < list.size - 1) append(",")
+                    appendLine()
+                }
+                appendLine("  ]")
+                appendLine("}")
+            }
+            Result.success(json)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun exportCsv(): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val snap = db.collection(FirebaseConfig.COL_FIREBASES).orderBy("addedAt").get().await()
+            val csv = buildString {
+                appendLine("index,id,url,label,added_at")
+                snap.documents.forEachIndexed { i, d ->
+                    val url = d.getString("url") ?: ""
+                    val label = (d.getString("label") ?: "").replace(",", " ")
+                    val addedAt = d.getLong("addedAt") ?: 0L
+                    appendLine("${i + 1},${d.id},$url,$label,$addedAt")
+                }
+            }
+            Result.success(csv)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun exportTxtUrlsOnly(): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val snap = db.collection(FirebaseConfig.COL_FIREBASES).orderBy("addedAt").get().await()
+            val txt = snap.documents.joinToString("\n") { it.getString("url") ?: "" }
+            Result.success(txt)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ============================================================
+    //  VALIDATE SINGLE
     // ============================================================
     private suspend fun checkFirebaseUrl(url: String): Result<Unit> = withContext(Dispatchers.IO) {
         val cleanUrl = url.trimEnd('/')
         try {
-            val req = Request.Builder()
-                .url("$cleanUrl/clients.json?shallow=true")
-                .get()
-                .build()
-
+            val req = Request.Builder().url("$cleanUrl/clients.json?shallow=true").get().build()
             http.newCall(req).execute().use { resp ->
                 when {
                     resp.isSuccessful -> Result.success(Unit)
@@ -254,66 +314,6 @@ class FirebaseImportService {
         raw.contains("network") -> "network"
         raw.startsWith("http_") -> raw
         else -> "unknown"
-    }
-
-    // ============================================================
-    //  EXTRACT URLs
-    // ============================================================
-    fun extractUrls(text: String): List<String> {
-        val matches = urlRegex.findAll(text)
-        val seen = HashSet<String>()
-        val out = mutableListOf<String>()
-        for (m in matches) {
-            var u = m.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}', '"', '\'')
-            if (u.isBlank()) continue
-            try {
-                val host = Uri.parse(u).host?.lowercase() ?: continue
-                if (excludedHosts.any { host.contains(it) }) continue
-            } catch (_: Exception) {
-                continue
-            }
-            if (u in seen) continue
-            seen.add(u)
-            out.add(u)
-        }
-        return out
-    }
-
-    // ============================================================
-    //  EXPORT — JSON string (bot parity)
-    // ============================================================
-    suspend fun exportFirebases(): Result<String> = withContext(Dispatchers.IO) {
-        try {
-            val snap = db.collection(FirebaseConfig.COL_FIREBASES)
-                .orderBy("addedAt")
-                .get().await()
-
-            val list = snap.documents.mapIndexed { i, d ->
-                val url = d.getString("url") ?: ""
-                val label = d.getString("label") ?: ""
-                val addedAt = d.getLong("addedAt") ?: 0L
-                """    {"index": ${i + 1}, "id": "${esc(d.id)}", "url": "${esc(url)}", "label": "${esc(label)}", "added_at": $addedAt}"""
-            }
-
-            val json = buildString {
-                appendLine("{")
-                appendLine("  \"version\": \"app-1.0\",")
-                appendLine("  \"exported_at\": ${System.currentTimeMillis() / 1000L},")
-                appendLine("  \"total\": ${list.size},")
-                appendLine("  \"firebases\": [")
-                list.forEachIndexed { i, line ->
-                    append(line)
-                    if (i < list.size - 1) append(",")
-                    appendLine()
-                }
-                appendLine("  ]")
-                appendLine("}")
-            }
-
-            Result.success(json)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
     }
 
     private fun esc(s: String): String =
