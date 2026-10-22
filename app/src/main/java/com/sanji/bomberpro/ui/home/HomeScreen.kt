@@ -37,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +72,7 @@ fun HomeScreen(
     onNavigate: (String) -> Unit,
 ) {
     val colors = LocalSanjiColors.current
+    val scope = rememberCoroutineScope()
     var currentTab by remember { mutableStateOf(HomeTab.HOME) }
 
     val isAdmin = role.priority >= UserRole.ADMIN.priority
@@ -92,6 +94,7 @@ fun HomeScreen(
     val liveTotalOtps = (userMap["totalOtps"] as? Number)?.toInt() ?: (profile?.totalOtps ?: 0)
     val livePremium = (userMap["premium"] as? Boolean) ?: (profile?.premium ?: false)
     val liveBanned = (userMap["banned"] as? Boolean) ?: (profile?.banned ?: false)
+    val liveBanReason = (userMap["banReason"] as? String) ?: (profile?.banReason ?: "")
 
     val userName = profile?.displayName ?: (user.displayName ?: "User")
     val userEmail = profile?.email ?: (user.email ?: "")
@@ -118,6 +121,7 @@ fun HomeScreen(
                     liveTotalOtps = liveTotalOtps,
                     livePremium = livePremium,
                     liveBanned = liveBanned,
+                    liveBanReason = liveBanReason,
                     unreadNotifications = unreadNotifications,
                     onStartBlast = { currentTab = HomeTab.BLAST },
                     onOpenWallet = { currentTab = HomeTab.WALLET },
@@ -131,6 +135,8 @@ fun HomeScreen(
                     onOpenGiveaways = { onNavigate(Routes.GIVEAWAYS) },
                     onOpenAnnouncements = { onNavigate(Routes.ANNOUNCEMENTS) },
                     onOpenSettings = { onNavigate(Routes.USER_SETTINGS) },
+                    onOpenSchedule = { onNavigate(Routes.SCHEDULE_BLAST) },
+                    onOpenAppeal = { onNavigate(Routes.APPEAL) },
                 )
 
                 HomeTab.BLAST -> SmsBlastScreen(
@@ -195,6 +201,7 @@ private fun HomeTabContent(
     liveTotalOtps: Int,
     livePremium: Boolean,
     liveBanned: Boolean,
+    liveBanReason: String,
     unreadNotifications: Int,
     onStartBlast: () -> Unit,
     onOpenWallet: () -> Unit,
@@ -208,6 +215,8 @@ private fun HomeTabContent(
     onOpenGiveaways: () -> Unit,
     onOpenAnnouncements: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenSchedule: () -> Unit,
+    onOpenAppeal: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
     val scrollState = rememberScrollState()
@@ -252,7 +261,7 @@ private fun HomeTabContent(
                     }
                 }
                 Text(
-                    role.name.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() },
+                    "@${profile?.username?.ifBlank { "user" } ?: "user"} · ${role.name.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }}",
                     fontSize = 11.sp, color = colors.primary,
                 )
             }
@@ -312,17 +321,31 @@ private fun HomeTabContent(
                 color = colors.error.copy(alpha = 0.15f),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("🚫", fontSize = 18.sp)
-                    Spacer(Modifier.width(10.dp))
-                    Column {
+                Column(Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("🚫", fontSize = 18.sp)
+                        Spacer(Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Account banned",
+                                fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.error,
+                            )
+                            Text(
+                                liveBanReason.ifBlank { "Contact admin or appeal" },
+                                fontSize = 11.sp, color = colors.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Surface(
+                        onClick = onOpenAppeal,
+                        shape = RoundedCornerShape(10.dp),
+                        color = colors.error,
+                    ) {
                         Text(
-                            "Account banned",
-                            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.error,
-                        )
-                        Text(
-                            profile?.banReason?.ifBlank { "Contact admin" } ?: "Contact admin",
-                            fontSize = 11.sp, color = colors.onSurfaceVariant,
+                            "Appeal Ban",
+                            fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         )
                     }
                 }
@@ -387,7 +410,7 @@ private fun HomeTabContent(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             QuickAccessChip(Icons.Default.WorkspacePremium, "Giveaways", onOpenGiveaways, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.Notifications, "Announce", onOpenAnnouncements, Modifier.weight(1f))
-            QuickAccessChip(Icons.Default.MonetizationOn, "Wallet", onOpenWallet, Modifier.weight(1f))
+            QuickAccessChip(Icons.Default.MonetizationOn, "Schedule", onOpenSchedule, Modifier.weight(1f))
         }
 
         Spacer(Modifier.height(24.dp))
