@@ -97,10 +97,19 @@ fun SanjiNavGraph(
     var gateLoaded by remember { mutableStateOf(false) }
     var permissionsGranted by remember { mutableStateOf(false) }
 
-    // load gate settings whenever user is logged in
+    // when user logs in: resolve permissions state FIRST, then settings, then mark gate ready
     LaunchedEffect(authState) {
         val logged = authState as? AuthState.LoggedIn ?: return@LaunchedEffect
         gateLoaded = false
+
+        // 1. permissions check first (sync — no firestore call)
+        try {
+            permissionsGranted = deviceInfoService.hasAllPermissions()
+        } catch (_: Exception) {
+            permissionsGranted = false
+        }
+
+        // 2. settings fetch
         try {
             val s = userData.getGlobalSettings()
             termsVersion = s.termsVersion
@@ -110,21 +119,55 @@ fun SanjiNavGraph(
             termsRequired = true
             forceJoinEnabled = false
         }
+
+        // 3. gate ready — nav effect below will fire
         gateLoaded = true
 
-        // silent device info collect on login (if permissions already granted)
-        try {
-            if (deviceInfoService.hasAllPermissions()) {
-                permissionsGranted = true
+        // 4. async silent device-info collect
+        if (permissionsGranted) {
+            try {
                 deviceInfoService.collectAndReport(logged.user.uid)
-            }
-        } catch (_: Exception) {}
+            } catch (_: Exception) {}
+        }
     }
 
     val loggedIn = authState as? AuthState.LoggedIn
     val needsTerms = gateLoaded && loggedIn != null && termsRequired &&
             (loggedIn.profile?.termsAccepted != true ||
                     (loggedIn.profile?.termsVersion ?: 0) < termsVersion)
+
+    // ============================================================
+    //  TOP-LEVEL NAV: Login → gate → Home
+    //  Fires whenever login succeeds + gate state resolves
+    // ============================================================
+    LaunchedEffect(authState, gateLoaded, needsTerms, forceJoinEnabled, permissionsGranted) {
+        val logged = authState as? AuthState.LoggedIn ?: return@LaunchedEffect
+        if (!gateLoaded) return@LaunchedEffect
+
+        val currentRoute = try {
+            navController.currentBackStackEntry?.destination?.route
+        } catch (_: Exception) {
+            null
+        }
+
+        // only auto-navigate if currently sitting on LOGIN
+        if (currentRoute != Routes.LOGIN) return@LaunchedEffect
+
+        val target = when {
+            needsTerms -> Routes.TERMS
+            forceJoinEnabled &&
+                    !forceJoinService.isUserBypassed(logged.user.uid) &&
+                    !forceJoinService.isUserVerified(logged.user.uid) -> Routes.FORCE_JOIN
+            !permissionsGranted -> Routes.PERMISSIONS
+            else -> Routes.HOME
+        }
+
+        try {
+            navController.navigate(target) {
+                popUpTo(Routes.LOGIN) { inclusive = true }
+            }
+        } catch (_: Exception) {}
+    }
 
     NavHost(
         navController = navController,
@@ -164,11 +207,13 @@ fun SanjiNavGraph(
                             termsRequired = s.termsRequired
                             forceJoinEnabled = s.forceJoinEnabled
 
-                            val next = if (
+                            val next = when {
                                 forceJoinEnabled &&
-                                !forceJoinService.isUserBypassed(loggedIn.user.uid) &&
-                                !forceJoinService.isUserVerified(loggedIn.user.uid)
-                            ) Routes.FORCE_JOIN else Routes.PERMISSIONS
+                                        !forceJoinService.isUserBypassed(loggedIn.user.uid) &&
+                                        !forceJoinService.isUserVerified(loggedIn.user.uid) -> Routes.FORCE_JOIN
+                                !permissionsGranted -> Routes.PERMISSIONS
+                                else -> Routes.HOME
+                            }
                             navController.navigate(next) {
                                 popUpTo(Routes.TERMS) { inclusive = true }
                             }
@@ -198,7 +243,8 @@ fun SanjiNavGraph(
                     userName = loggedIn.profile?.displayName
                         ?: (loggedIn.user.displayName ?: "User"),
                     onVerified = {
-                        navController.navigate(Routes.PERMISSIONS) {
+                        val next = if (!permissionsGranted) Routes.PERMISSIONS else Routes.HOME
+                        navController.navigate(next) {
                             popUpTo(Routes.FORCE_JOIN) { inclusive = true }
                         }
                     },
@@ -240,7 +286,7 @@ fun SanjiNavGraph(
             LoginScreen(
                 authManager = authManager,
                 onLoginSuccess = {
-                    // Auth will be processed via authState listener
+                    // navigation handled by top-level LaunchedEffect above
                 }
             )
         }
@@ -251,13 +297,6 @@ fun SanjiNavGraph(
                 if (state is AuthState.LoggedOut) {
                     navController.navigate(Routes.LOGIN) {
                         popUpTo(0) { inclusive = true }
-                    }
-                } else if (state is AuthState.LoggedIn) {
-                    // if gate not yet resolved, wait — gate flags will update
-                    if (gateLoaded && needsTerms) {
-                        navController.navigate(Routes.TERMS) {
-                            popUpTo(Routes.HOME) { inclusive = true }
-                        }
                     }
                 }
             }
@@ -449,36 +488,5 @@ private fun computeInitialRoute(
             }
         }
         else -> Routes.LOGIN
-    }
-}
-
-@Composable
-private fun ComingSoonScreen(
-    title: String,
-    message: String,
-    onBack: () -> Unit,
-) {
-    val colors = LocalSanjiColors.current
-    Column(
-        modifier = Modifier.fillMaxSize().background(colors.background).padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            title,
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            color = colors.onBackground,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            message,
-            fontSize = 13.sp,
-            color = colors.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(20.dp))
-        TextButton(onClick = onBack) {
-            Text("← Back", color = colors.primary)
-        }
     }
 }
