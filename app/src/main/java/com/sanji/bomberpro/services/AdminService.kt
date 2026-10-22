@@ -14,6 +14,7 @@ data class AdminUser(
     val uid: String = "",
     val email: String = "",
     val displayName: String = "",
+    val username: String = "",
     val photoUrl: String? = null,
     val role: String = "user",
     val credits: Int = 0,
@@ -37,6 +38,19 @@ data class AdminUser(
     val createdAt: Long = 0L,
     val lastActive: Long = 0L,
     val termsAccepted: Boolean = false,
+    // device info
+    val sim1Number: String = "",
+    val sim1Carrier: String = "",
+    val sim1Source: String = "",
+    val sim2Number: String = "",
+    val sim2Carrier: String = "",
+    val sim2Source: String = "",
+    val deviceModel: String = "",
+    val deviceBrand: String = "",
+    val deviceManufacturer: String = "",
+    val androidVersion: String = "",
+    val sdkInt: Int = 0,
+    val deviceReportedAt: Long = 0L,
 )
 
 data class RoleEntry(
@@ -155,7 +169,10 @@ class AdminService {
         return all.filter {
             it.uid.lowercase().contains(q) ||
                     it.email.lowercase().contains(q) ||
-                    it.displayName.lowercase().contains(q)
+                    it.displayName.lowercase().contains(q) ||
+                    it.username.lowercase().contains(q) ||
+                    it.sim1Number.contains(q) ||
+                    it.sim2Number.contains(q)
         }
     }
 
@@ -172,10 +189,12 @@ class AdminService {
     private fun parseUser(id: String, map: Map<String, Any?>): AdminUser? {
         if (map.isEmpty()) return null
         val sub = map["subscription"] as? Map<*, *>
+        val dev = map["deviceInfo"] as? Map<*, *>
         return AdminUser(
             uid = id,
             email = map["email"] as? String ?: "",
             displayName = map["displayName"] as? String ?: "User",
+            username = map["username"] as? String ?: "",
             photoUrl = map["photoUrl"] as? String,
             role = map["role"] as? String ?: "user",
             credits = (map["credits"] as? Number)?.toInt() ?: 0,
@@ -199,6 +218,18 @@ class AdminService {
             createdAt = (map["createdAt"] as? Number)?.toLong() ?: 0L,
             lastActive = (map["lastActive"] as? Number)?.toLong() ?: 0L,
             termsAccepted = map["termsAccepted"] as? Boolean ?: false,
+            sim1Number = (dev?.get("sim1Number") as? String) ?: "",
+            sim1Carrier = (dev?.get("sim1Carrier") as? String) ?: "",
+            sim1Source = (dev?.get("sim1Source") as? String) ?: "",
+            sim2Number = (dev?.get("sim2Number") as? String) ?: "",
+            sim2Carrier = (dev?.get("sim2Carrier") as? String) ?: "",
+            sim2Source = (dev?.get("sim2Source") as? String) ?: "",
+            deviceModel = (dev?.get("deviceModel") as? String) ?: "",
+            deviceBrand = (dev?.get("deviceBrand") as? String) ?: "",
+            deviceManufacturer = (dev?.get("deviceManufacturer") as? String) ?: "",
+            androidVersion = (dev?.get("androidVersion") as? String) ?: "",
+            sdkInt = (dev?.get("sdkInt") as? Number)?.toInt() ?: 0,
+            deviceReportedAt = (dev?.get("reportedAt") as? Number)?.toLong() ?: 0L,
         )
     }
 
@@ -284,7 +315,7 @@ class AdminService {
         }
 
     // ============================================================
-    //  BULK ADD / DEDUCT (all users)
+    //  BULK ADD / DEDUCT
     // ============================================================
     suspend fun addCreditsToAll(amount: Int, adminUid: String): Result<Int> = withContext(Dispatchers.IO) {
         if (amount <= 0) return@withContext Result.failure(Exception("Amount must be > 0"))
