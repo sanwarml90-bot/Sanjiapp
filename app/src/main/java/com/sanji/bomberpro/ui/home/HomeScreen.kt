@@ -37,7 +37,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,7 +71,6 @@ fun HomeScreen(
     onNavigate: (String) -> Unit,
 ) {
     val colors = LocalSanjiColors.current
-    val scope = rememberCoroutineScope()
     var currentTab by remember { mutableStateOf(HomeTab.HOME) }
 
     val isAdmin = role.priority >= UserRole.ADMIN.priority
