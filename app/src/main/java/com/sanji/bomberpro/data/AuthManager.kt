@@ -87,7 +87,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  EMAIL — SIGN IN ONLY
+    //  EMAIL — SIGN IN
     // ============================================================
     suspend fun signInWithEmail(email: String, password: String): Result<FirebaseUser> {
         val cleanEmail = email.trim().lowercase()
@@ -106,7 +106,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  EMAIL — SIGN UP ONLY
+    //  EMAIL — SIGN UP (with unique username check)
     // ============================================================
     suspend fun signUpWithEmail(
         email: String,
@@ -120,6 +120,19 @@ class AuthManager(private val context: Context) {
         if (!cleanUsername.matches(Regex("^[a-zA-Z0-9_]+$")))
             return Result.failure(Exception("Username: letters, numbers, _ only"))
         if (password.length < 6) return Result.failure(Exception("Password min 6 chars"))
+
+        // Uniqueness check BEFORE creating the auth user — prevents orphan auth records
+        try {
+            val existingSnap = db.collection(FirebaseConfig.COL_USERS)
+                .whereEqualTo("usernameLower", cleanUsername.lowercase())
+                .limit(1).get().await()
+            if (!existingSnap.isEmpty) {
+                return Result.failure(Exception("Username already taken"))
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "username uniqueness check failed", e)
+            return Result.failure(Exception("Could not check username — try again"))
+        }
 
         return try {
             val result = auth.createUserWithEmailAndPassword(cleanEmail, password).await()
@@ -219,13 +232,15 @@ class AuthManager(private val context: Context) {
                 val finalDisplayName = username
                     ?: user.displayName
                     ?: (user.email?.substringBefore("@") ?: "")
+                val finalUsername = username ?: finalDisplayName
 
                 userRef.set(
                     mapOf(
                         "uid" to uid,
                         "email" to (user.email ?: ""),
                         "displayName" to finalDisplayName,
-                        "username" to (username ?: finalDisplayName),
+                        "username" to finalUsername,
+                        "usernameLower" to finalUsername.lowercase(),
                         "photoUrl" to (user.photoUrl?.toString() ?: ""),
                         "role" to role,
                         "credits" to 0,
@@ -277,7 +292,19 @@ class AuthManager(private val context: Context) {
                 val updates = mutableMapOf<String, Any>("lastActive" to nowSec())
                 user.displayName?.let { if (it.isNotBlank()) updates["displayName"] = it }
                 user.photoUrl?.let { updates["photoUrl"] = it.toString() }
-                if (username != null) updates["username"] = username
+                if (username != null) {
+                    updates["username"] = username
+                    updates["usernameLower"] = username.lowercase()
+                } else {
+                    // Backfill usernameLower for legacy users
+                    val existing = snapshot.data ?: emptyMap()
+                    val existingUsername = (existing["username"] as? String)?.trim()
+                        ?: (existing["displayName"] as? String)?.trim()
+                        ?: ""
+                    if (existingUsername.isNotBlank() && !existing.containsKey("usernameLower")) {
+                        updates["usernameLower"] = existingUsername.lowercase()
+                    }
+                }
                 try {
                     userRef.update(updates).await()
                 } catch (_: Exception) {}
@@ -352,6 +379,14 @@ class AuthManager(private val context: Context) {
                         lastActive = profileDoc.getLong("lastActive") ?: 0L,
                     )
 
+                    // Backfill usernameLower for legacy users (defensive)
+                    if (!profileDoc.contains("usernameLower") && un.isNotBlank()) {
+                        try {
+                            db.collection(FirebaseConfig.COL_USERS).document(user.uid)
+                                .update("usernameLower", un.lowercase()).await()
+                        } catch (_: Exception) {}
+                    }
+
                     val storedRole = profileDoc.getString("role") ?: "user"
                     val computedRole = when (role) {
                         UserRole.OWNER -> "owner"
@@ -366,8 +401,6 @@ class AuthManager(private val context: Context) {
                         } catch (_: Exception) {}
                     }
                 } else {
-                    // fallback: user doc missing — create minimal profile
-                    // so terms gate can fire (termsAccepted defaults to false)
                     profile = UserProfile(
                         uid = user.uid,
                         email = email,
@@ -415,7 +448,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  USERNAME UPDATE
+    //  USERNAME UPDATE (with uniqueness check)
     // ============================================================
     suspend fun updateUsername(newUsername: String): Result<Unit> {
         val user = auth.currentUser ?: return Result.failure(Exception("Not signed in"))
@@ -423,13 +456,33 @@ class AuthManager(private val context: Context) {
         if (clean.length < 3) return Result.failure(Exception("Username min 3 chars"))
         if (!clean.matches(Regex("^[a-zA-Z0-9_]+$")))
             return Result.failure(Exception("Letters, numbers, _ only"))
+
+        // Uniqueness check — same username allowed only for this same user
+        try {
+            val existingSnap = db.collection(FirebaseConfig.COL_USERS)
+                .whereEqualTo("usernameLower", clean.lowercase())
+                .limit(1).get().await()
+            if (!existingSnap.isEmpty) {
+                val existingUid = existingSnap.documents.first().id
+                if (existingUid != user.uid) {
+                    return Result.failure(Exception("Username already taken"))
+                }
+            }
+        } catch (e: Exception) {
+            return Result.failure(Exception("Could not check username — try again"))
+        }
+
         return try {
             val profileUpdates = UserProfileChangeRequest.Builder()
                 .setDisplayName(clean)
                 .build()
             user.updateProfile(profileUpdates).await()
             db.collection(FirebaseConfig.COL_USERS).document(user.uid)
-                .update("username", clean, "displayName", clean).await()
+                .update(
+                    "username", clean,
+                    "displayName", clean,
+                    "usernameLower", clean.lowercase(),
+                ).await()
             loadProfileAndRole(user)
             Result.success(Unit)
         } catch (e: Exception) {
