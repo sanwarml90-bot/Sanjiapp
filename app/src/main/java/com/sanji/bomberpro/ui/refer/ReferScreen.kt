@@ -50,6 +50,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sanji.bomberpro.services.ReferralLeaderboardService
+import com.sanji.bomberpro.services.Referrer
 import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
@@ -66,6 +68,7 @@ fun ReferScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val userData = remember { UserDataService() }
+    val leaderboardService = remember { ReferralLeaderboardService() }
 
     var referCode by remember { mutableStateOf("") }
     var referredBy by remember { mutableStateOf<String?>(null) }
@@ -77,6 +80,8 @@ fun ReferScreen(
     var applying by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf<String?>(null) }
+    var topReferrers by remember { mutableStateOf<List<Referrer>>(emptyList()) }
+    var loadingLeaderboard by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         val settings = userData.getGlobalSettings()
@@ -84,6 +89,10 @@ fun ReferScreen(
         refCoins = settings.refCoins
         referCount = userData.getReferralCount(uid)
         loading = false
+        try {
+            topReferrers = leaderboardService.getTopReferrers(10)
+        } catch (_: Exception) {}
+        loadingLeaderboard = false
     }
 
     LaunchedEffect(uid) {
@@ -94,8 +103,11 @@ fun ReferScreen(
     }
 
     fun copyToClipboard(label: String, value: String) {
-        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText(label, value))
+        try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText(label, value))
+            success = "Copied"
+        } catch (_: Exception) { error = "Copy failed" }
     }
 
     fun buildShareText(): String {
@@ -110,9 +122,7 @@ fun ReferScreen(
             val text = Uri.encode(buildShareText())
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/?text=$text"))
             context.startActivity(intent)
-        } catch (_: Exception) {
-            error = "WhatsApp not installed"
-        }
+        } catch (_: Exception) { error = "WhatsApp not installed" }
     }
 
     fun shareToTelegram() {
@@ -120,9 +130,7 @@ fun ReferScreen(
             val text = Uri.encode(buildShareText())
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/share/url?url=${Uri.encode(APP_DOWNLOAD_URL)}&text=$text"))
             context.startActivity(intent)
-        } catch (_: Exception) {
-            error = "Telegram not installed"
-        }
+        } catch (_: Exception) { error = "Telegram not installed" }
     }
 
     fun shareGeneric() {
@@ -132,9 +140,7 @@ fun ReferScreen(
                 putExtra(Intent.EXTRA_TEXT, buildShareText())
             }
             context.startActivity(Intent.createChooser(intent, "Share referral"))
-        } catch (_: Exception) {
-            error = "Unable to share"
-        }
+        } catch (_: Exception) { error = "Unable to share" }
     }
 
     Column(
@@ -164,7 +170,7 @@ fun ReferScreen(
             return
         }
 
-        // Hero card — code + share
+        // Hero card
         Surface(
             shape = RoundedCornerShape(24.dp),
             color = Color.Transparent,
@@ -173,11 +179,7 @@ fun ReferScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(colors.primary, colors.secondary)
-                        )
-                    )
+                    .background(Brush.linearGradient(colors = listOf(colors.primary, colors.secondary)))
                     .padding(20.dp),
             ) {
                 Column {
@@ -244,7 +246,77 @@ fun ReferScreen(
             }
         }
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(16.dp))
+
+        // Top Referrers Leaderboard
+        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🏆", fontSize = 20.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Top Referrers",
+                        fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                        color = colors.onBackground,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "All time",
+                        fontSize = 10.sp, color = colors.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                if (loadingLeaderboard) {
+                    Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = colors.primary)
+                    }
+                } else if (topReferrers.isEmpty()) {
+                    Text(
+                        "No referrals yet — be the first!",
+                        fontSize = 12.sp, color = colors.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    )
+                } else {
+                    val medals = listOf("🥇", "🥈", "🥉")
+                    topReferrers.forEachIndexed { idx, r ->
+                        val isMe = r.uid == uid
+                        val medal = if (idx < 3) medals[idx] else "#${idx + 1}"
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isMe) colors.primary.copy(alpha = 0.12f) else colors.background,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    medal,
+                                    fontSize = 16.sp,
+                                    modifier = Modifier.width(32.dp),
+                                )
+                                Text(
+                                    r.name + if (isMe) " (you)" else "",
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isMe) FontWeight.Bold else FontWeight.SemiBold,
+                                    color = colors.onBackground,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    "${r.count} refs",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colors.primary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
 
         // Share buttons
         Text(
@@ -298,6 +370,9 @@ fun ReferScreen(
                                     val r = result.getOrNull()
                                     success = "Redeemed! +${r?.creditsAwarded} credits + ${r?.coinsAwarded} coins"
                                     inputCode = ""
+                                    try {
+                                        topReferrers = leaderboardService.getTopReferrers(10)
+                                    } catch (_: Exception) {}
                                 } else {
                                     error = result.exceptionOrNull()?.message ?: "Failed"
                                 }
