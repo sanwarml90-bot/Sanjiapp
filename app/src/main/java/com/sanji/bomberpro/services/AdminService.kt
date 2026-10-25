@@ -6,6 +6,7 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.sanji.bomberpro.FirebaseConfig
 import com.sanji.bomberpro.data.FirebaseNode
+import com.sanji.bomberpro.data.PaymentRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -38,7 +39,6 @@ data class AdminUser(
     val createdAt: Long = 0L,
     val lastActive: Long = 0L,
     val termsAccepted: Boolean = false,
-    // device info
     val sim1Number: String = "",
     val sim1Carrier: String = "",
     val sim1Source: String = "",
@@ -718,6 +718,177 @@ class AdminService {
 
     private fun hashEmail(email: String): String =
         email.lowercase().trim().replace("@", "_at_").replace(".", "_dot_")
+
+    // ============================================================
+    //  PAYMENT REVIEW (owner-only)
+    // ============================================================
+    suspend fun listPendingPayments(limit: Long = 100): List<PaymentRequest> = withContext(Dispatchers.IO) {
+        try {
+            db.collection(FirebaseConfig.COL_PAYMENT_REQUESTS)
+                .whereEqualTo("status", "pending")
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .limit(limit)
+                .get().await()
+                .documents.mapNotNull { parsePaymentRequest(it.id, it.data ?: emptyMap()) }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun approvePayment(requestId: String, adminUid: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val reqRef = db.collection(FirebaseConfig.COL_PAYMENT_REQUESTS).document(requestId)
+        try {
+            var targetUid = ""
+            var txType = ""
+            var creditsAmount = 0
+            var planId = ""
+
+            db.runTransaction { txn ->
+                val snap = txn.get(reqRef)
+                if (!snap.exists()) throw IllegalStateException("Request not found")
+                val status = snap.getString("status") ?: "pending"
+                if (status != "pending") throw IllegalStateException("Already $status")
+
+                targetUid = snap.getString("uid") ?: throw IllegalStateException("No UID in request")
+                txType = snap.getString("type") ?: "credits"
+                creditsAmount = (snap.getLong("creditsAmount") ?: 0L).toInt()
+                planId = snap.getString("plan") ?: ""
+
+                val now = System.currentTimeMillis() / 1000L
+                val userRef = db.collection(FirebaseConfig.COL_USERS).document(targetUid)
+
+                if (txType == "credits" && creditsAmount > 0) {
+                    txn.update(userRef, "credits", FieldValue.increment(creditsAmount.toLong()))
+                } else if (txType == "subscription" && planId.isNotBlank()) {
+                    val expiry = now + 30L * 86400L
+                    txn.update(
+                        userRef,
+                        "subscription.plan", planId,
+                        "subscription.expiresAt", expiry,
+                        "subscription.startedAt", now,
+                    )
+                }
+
+                txn.update(
+                    reqRef,
+                    "status", "approved",
+                    "reviewedAt", now,
+                    "reviewedBy", adminUid,
+                )
+                Unit
+            }.await()
+
+            val now = System.currentTimeMillis() / 1000L
+            if (txType == "credits" && creditsAmount > 0) {
+                try {
+                    db.collection(FirebaseConfig.COL_TRANSACTIONS).add(
+                        mapOf(
+                            "uid" to targetUid,
+                            "type" to "credit_add_manual",
+                            "delta" to creditsAmount.toLong(),
+                            "reason" to "payment-approved-${requestId.take(8)}",
+                            "ts" to now,
+                        )
+                    ).await()
+                } catch (_: Exception) {}
+            }
+
+            try {
+                logAudit(adminUid, "payment_approve", targetUid, creditsAmount, requestId.take(40))
+            } catch (_: Exception) {}
+
+            try {
+                val notifRef = db.collection(FirebaseConfig.COL_NOTIFICATIONS).document()
+                notifRef.set(
+                    mapOf(
+                        "id" to notifRef.id,
+                        "uid" to targetUid,
+                        "title" to "Payment approved",
+                        "body" to if (txType == "credits")
+                            "+$creditsAmount credits added to your wallet"
+                        else
+                            "Subscription $planId activated",
+                        "type" to "payment",
+                        "read" to false,
+                        "ts" to now,
+                    )
+                ).await()
+            } catch (_: Exception) {}
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun rejectPayment(
+        requestId: String,
+        adminUid: String,
+        reason: String = "",
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val reqRef = db.collection(FirebaseConfig.COL_PAYMENT_REQUESTS).document(requestId)
+        try {
+            val snap = reqRef.get().await()
+            if (!snap.exists()) return@withContext Result.failure(Exception("Request not found"))
+            val status = snap.getString("status") ?: "pending"
+            if (status != "pending") return@withContext Result.failure(Exception("Already $status"))
+            val targetUid = snap.getString("uid") ?: ""
+
+            val now = System.currentTimeMillis() / 1000L
+            reqRef.update(
+                "status", "rejected",
+                "reviewedAt", now,
+                "reviewedBy", adminUid,
+                "rejectionReason", reason.take(200),
+            ).await()
+
+            try {
+                logAudit(adminUid, "payment_reject", targetUid, 0, reason.take(80))
+            } catch (_: Exception) {}
+
+            try {
+                val notifRef = db.collection(FirebaseConfig.COL_NOTIFICATIONS).document()
+                notifRef.set(
+                    mapOf(
+                        "id" to notifRef.id,
+                        "uid" to targetUid,
+                        "title" to "Payment rejected",
+                        "body" to reason.ifBlank { "Contact support for details" },
+                        "type" to "payment",
+                        "read" to false,
+                        "ts" to now,
+                    )
+                ).await()
+            } catch (_: Exception) {}
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun parsePaymentRequest(id: String, map: Map<String, Any?>): PaymentRequest {
+        return PaymentRequest(
+            id = id,
+            uid = map["uid"] as? String ?: "",
+            userName = map["userName"] as? String ?: "",
+            userEmail = map["userEmail"] as? String ?: "",
+            type = map["type"] as? String ?: "credits",
+            packId = map["packId"] as? String ?: "",
+            packName = map["packName"] as? String ?: "",
+            creditsAmount = (map["creditsAmount"] as? Number)?.toInt() ?: 0,
+            plan = map["plan"] as? String ?: "",
+            amount = (map["amount"] as? Number)?.toInt() ?: 0,
+            utr = map["utr"] as? String ?: "",
+            description = map["description"] as? String ?: "",
+            status = map["status"] as? String ?: "pending",
+            telegramMsgId = (map["telegramMsgId"] as? Number)?.toLong() ?: 0L,
+            createdAt = (map["createdAt"] as? Number)?.toLong() ?: 0L,
+            reviewedAt = (map["reviewedAt"] as? Number)?.toLong() ?: 0L,
+            reviewedBy = map["reviewedBy"] as? String ?: "",
+            rejectionReason = map["rejectionReason"] as? String ?: "",
+        )
+    }
 
     // ============================================================
     //  LOGGING
