@@ -2,12 +2,8 @@ package com.sanji.bomberpro.navigation
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -16,7 +12,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -172,13 +167,17 @@ fun SanjiNavGraph(
             forceJoinEnabled = false
         }
 
+        // Admin+ roles never blocked by force join
         try {
-            userForceJoinOk = if (!forceJoinEnabled) true else {
-                forceJoinService.isUserVerified(logged.user.uid) ||
+            userForceJoinOk = when {
+                !forceJoinEnabled -> true
+                logged.role.priority >= UserRole.ADMIN.priority -> true
+                else -> forceJoinService.isUserVerified(logged.user.uid) ||
                         forceJoinService.isUserBypassed(logged.user.uid)
             }
         } catch (_: Exception) {
-            userForceJoinOk = !forceJoinEnabled
+            userForceJoinOk = !forceJoinEnabled ||
+                    logged.role.priority >= UserRole.ADMIN.priority
         }
 
         gateLoaded = true
@@ -193,7 +192,6 @@ fun SanjiNavGraph(
             (loggedIn.profile?.termsAccepted != true ||
                     (loggedIn.profile?.termsVersion ?: 0) < termsVersion)
 
-    // Re-drive from SPLASH: handles LoggedOut → LOGIN, and LoggedIn + gateLoaded → gate chain
     LaunchedEffect(gateLoaded, authState) {
         val currentRoute = try {
             navController.currentBackStackEntry?.destination?.route
@@ -229,7 +227,6 @@ fun SanjiNavGraph(
         }
     }
 
-    // Safety net — if splash is somehow still showing after 4s and nothing moved, force to login
     LaunchedEffect(Unit) {
         delay(4000)
         try {
@@ -277,7 +274,6 @@ fun SanjiNavGraph(
         return
     }
 
-    // LOGIN → gate chain
     LaunchedEffect(authState, gateLoaded, needsTerms, forceJoinEnabled, userForceJoinOk, permissionsGranted, appLocked) {
         val logged = authState as? AuthState.LoggedIn ?: return@LaunchedEffect
         if (!gateLoaded) return@LaunchedEffect
@@ -305,7 +301,6 @@ fun SanjiNavGraph(
         composable(Routes.SPLASH) {
             SplashScreen(
                 onFinished = {
-                    // Route out of splash on animation end — covers all auth states.
                     when (authState) {
                         is AuthState.LoggedOut, is AuthState.Initializing -> {
                             try {
@@ -316,7 +311,6 @@ fun SanjiNavGraph(
                         }
                         is AuthState.LoggedIn -> {
                             if (!gateLoaded) {
-                                // Wait for gate LaunchedEffect to complete — do nothing here
                                 return@SplashScreen
                             }
                             val target = computeInitialRoute(
@@ -378,6 +372,7 @@ fun SanjiNavGraph(
                     authManager = authManager,
                     uid = loggedIn.user.uid,
                     userName = loggedIn.profile?.displayName ?: (loggedIn.user.displayName ?: "User"),
+                    isAdmin = loggedIn.role.priority >= UserRole.ADMIN.priority,
                     onVerified = {
                         userForceJoinOk = true
                         val next = if (!permissionsGranted) Routes.PERMISSIONS else Routes.HOME
@@ -502,6 +497,7 @@ fun SanjiNavGraph(
                 LaunchedEffect(Unit) {
                     verified = try {
                         if (!forceJoinEnabled) true
+                        else if (logged.role.priority >= UserRole.ADMIN.priority) true
                         else forceJoinService.isUserVerified(logged.user.uid) ||
                                 forceJoinService.isUserBypassed(logged.user.uid)
                     } catch (_: Exception) {
