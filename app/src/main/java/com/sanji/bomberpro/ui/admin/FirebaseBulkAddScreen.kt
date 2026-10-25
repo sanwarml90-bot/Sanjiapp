@@ -1,6 +1,7 @@
 package com.sanji.bomberpro.ui.admin
 
 import android.content.ContentValues
+import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -47,7 +48,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,12 +65,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.services.FirebaseImportService
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 private enum class BulkTab { FILE, PASTE, EXPORT }
 private enum class BulkPhase { IDLE, EXTRACTING, PREVIEW, VALIDATING, INSERTING, RESULT }
+
+// Hard limits — prevent OOM, keep UI responsive
+private const val MAX_FILE_BYTES = 10L * 1024L * 1024L          // 10 MB per file
+private const val MAX_TOTAL_BYTES = 30L * 1024L * 1024L          // 30 MB aggregate
+private const val MAX_FILES = 10
 
 @Composable
 fun FirebaseBulkAddScreen(
@@ -101,6 +110,7 @@ fun FirebaseBulkAddScreen(
     var addedCount by remember { mutableStateOf(0) }
     var skippedExisting by remember { mutableStateOf(0) }
     var failureList by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var fileErrors by remember { mutableStateOf<List<String>>(emptyList()) }
     var showFailureDetails by remember { mutableStateOf(false) }
     var cancelled by remember { mutableStateOf(false) }
 
@@ -109,39 +119,140 @@ fun FirebaseBulkAddScreen(
 
     val cancelFlag = remember { AtomicBoolean(false) }
 
-    // Local multi-file picker — no parent handoff, no race condition
-    val multiFilePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents(),
-    ) { uris ->
-        if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
-        phase = BulkPhase.EXTRACTING
-        error = null
-        extracted.clear()
-        selected.clear()
-        scope.launch {
+    // ============================================================
+    //  SAFE FILE READER — byte-capped, OOM-safe
+    // ============================================================
+    suspend fun readUriSafely(uri: Uri, maxBytes: Long): Result<String> =
+        withContext(Dispatchers.IO) {
+            var stream: InputStream? = null
             try {
-                val allUrls = mutableListOf<String>()
-                for (u in uris) {
-                    val read = service.readUriText(u, context.contentResolver)
-                    if (read.isFailure) {
-                        error = "Read failed: ${read.exceptionOrNull()?.message}"
-                        continue
+                // Pre-check size via AssetFileDescriptor when available
+                try {
+                    context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                        val declared = afd.length
+                        if (declared > maxBytes) {
+                            return@withContext Result.failure(
+                                Exception("File exceeds ${maxBytes / 1024 / 1024}MB (declared ${declared / 1024 / 1024}MB)")
+                            )
+                        }
                     }
-                    allUrls.addAll(service.extractUrls(read.getOrNull() ?: ""))
+                } catch (_: Exception) {
+                    // AssetFileDescriptor not available — fall through to capped streaming read
                 }
-                val unique = allUrls.toSet().toList()
-                if (unique.isEmpty()) {
-                    error = "No URLs found in selected file(s)"
-                    phase = BulkPhase.IDLE
-                    return@launch
+
+                stream = context.contentResolver.openInputStream(uri)
+                    ?: return@withContext Result.failure(Exception("Cannot open file"))
+
+                val buf = ByteArray(64 * 1024)
+                val out = ByteArrayOutputStream()
+                var total = 0L
+                while (true) {
+                    val n = stream.read(buf)
+                    if (n <= 0) break
+                    total += n
+                    if (total > maxBytes) {
+                        return@withContext Result.failure(
+                            Exception("File exceeds ${maxBytes / 1024 / 1024}MB while reading")
+                        )
+                    }
+                    out.write(buf, 0, n)
                 }
-                extracted.addAll(unique)
-                selected.addAll(unique.map { true })
-                phase = BulkPhase.PREVIEW
+                Result.success(out.toByteArray().toString(Charsets.UTF_8))
+            } catch (e: OutOfMemoryError) {
+                Result.failure(Exception("Out of memory reading file — try a smaller file"))
+            } catch (e: SecurityException) {
+                Result.failure(Exception("Permission denied: ${e.message ?: "unknown"}"))
             } catch (e: Exception) {
-                error = "Extract failed: ${e.message}"
-                phase = BulkPhase.IDLE
+                Result.failure(Exception("Read failed: ${e.message ?: "unknown"}"))
+            } finally {
+                try { stream?.close() } catch (_: Exception) {}
             }
+        }
+
+    // ============================================================
+    //  FILE PICKER — OpenMultipleDocuments, text filters
+    // ============================================================
+    val multiFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris: List<Uri> ->
+        // Catch Throwable — never let the callback crash the process
+        try {
+            if (uris.isEmpty()) return@rememberLauncherForActivityResult
+
+            phase = BulkPhase.EXTRACTING
+            error = null
+            fileErrors = emptyList()
+            extracted.clear()
+            selected.clear()
+
+            scope.launch {
+                try {
+                    val allUrls = mutableListOf<String>()
+                    val localFileErrors = mutableListOf<String>()
+                    var totalBytesRead = 0L
+                    var processedCount = 0
+
+                    for (u in uris) {
+                        if (processedCount >= MAX_FILES) {
+                            localFileErrors.add("Skipped: max $MAX_FILES files per import")
+                            break
+                        }
+                        if (totalBytesRead >= MAX_TOTAL_BYTES) {
+                            localFileErrors.add("Skipped: total ${MAX_TOTAL_BYTES / 1024 / 1024}MB limit reached")
+                            break
+                        }
+                        val remaining = MAX_TOTAL_BYTES - totalBytesRead
+                        val perFileCap = minOf(MAX_FILE_BYTES, remaining)
+
+                        val fileName = queryDisplayName(context, u) ?: "file"
+                        val read = readUriSafely(u, perFileCap)
+                        if (read.isFailure) {
+                            localFileErrors.add("$fileName: ${read.exceptionOrNull()?.message ?: "read failed"}")
+                            continue
+                        }
+                        val text = read.getOrNull() ?: ""
+                        totalBytesRead += text.length.toLong()
+                        processedCount++
+
+                        if (text.isBlank()) {
+                            localFileErrors.add("$fileName: empty")
+                            continue
+                        }
+                        try {
+                            allUrls.addAll(service.extractUrls(text))
+                        } catch (e: Exception) {
+                            localFileErrors.add("$fileName: extraction error (${e.message ?: "unknown"})")
+                        }
+                    }
+
+                    val unique = allUrls.toSet().toList()
+                    fileErrors = localFileErrors
+
+                    if (unique.isEmpty()) {
+                        error = if (localFileErrors.isNotEmpty())
+                            "No URLs found. ${localFileErrors.size} file(s) skipped."
+                        else
+                            "No URLs found in selected file(s)"
+                        phase = BulkPhase.IDLE
+                        return@launch
+                    }
+                    extracted.addAll(unique)
+                    selected.addAll(unique.map { true })
+                    phase = BulkPhase.PREVIEW
+                } catch (e: OutOfMemoryError) {
+                    error = "Out of memory reading files — try smaller files"
+                    phase = BulkPhase.IDLE
+                } catch (e: Throwable) {
+                    error = "Extract failed: ${e.message ?: e.javaClass.simpleName}"
+                    phase = BulkPhase.IDLE
+                }
+            }
+        } catch (e: Throwable) {
+            // Absolute last-resort guard — never crash the app from the picker callback
+            try {
+                error = "File picker callback error: ${e.message ?: e.javaClass.simpleName}"
+                phase = BulkPhase.IDLE
+            } catch (_: Throwable) {}
         }
     }
 
@@ -162,9 +273,9 @@ fun FirebaseBulkAddScreen(
         scope.launch {
             try {
                 val existing = service.loadExistingUrls()
-                val already = urls.count { it.trimEnd('/') in existing }
+                val already = urls.count { it.trimEnd('/').lowercase() in existing }
                 skippedExisting = already
-                val toCheck = urls.filter { it.trimEnd('/') !in existing }
+                val toCheck = urls.filter { it.trimEnd('/').lowercase() !in existing }
 
                 if (toCheck.isEmpty()) {
                     addedCount = 0
@@ -206,8 +317,8 @@ fun FirebaseBulkAddScreen(
                 failureList = validation.failed
                 phase = BulkPhase.RESULT
                 onCompleted()
-            } catch (e: Exception) {
-                error = "Validation failed: ${e.message}"
+            } catch (e: Throwable) {
+                error = "Validation failed: ${e.message ?: e.javaClass.simpleName}"
                 phase = BulkPhase.IDLE
             }
         }
@@ -255,6 +366,7 @@ fun FirebaseBulkAddScreen(
                         selected.clear()
                         phase = BulkPhase.IDLE
                         failureList = emptyList()
+                        fileErrors = emptyList()
                         addedCount = 0
                         skippedExisting = 0
                         cancelled = false
@@ -293,9 +405,16 @@ fun FirebaseBulkAddScreen(
                                 Surface(
                                     onClick = {
                                         try {
-                                            multiFilePicker.launch("*/*")
-                                        } catch (e: Exception) {
-                                            error = "File picker unavailable: ${e.message}"
+                                            multiFilePicker.launch(
+                                                arrayOf(
+                                                    "text/*",
+                                                    "application/json",
+                                                    "application/x-json",
+                                                    "application/x-ndjson",
+                                                )
+                                            )
+                                        } catch (e: Throwable) {
+                                            error = "File picker unavailable: ${e.message ?: e.javaClass.simpleName}"
                                         }
                                     },
                                     shape = RoundedCornerShape(14.dp),
@@ -310,7 +429,10 @@ fun FirebaseBulkAddScreen(
                                         Spacer(Modifier.width(12.dp))
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text("Select Files", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
-                                            Text("Pick one or more files — multi-select supported", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                                            Text(
+                                                "Text or JSON · up to $MAX_FILES files · ${MAX_FILE_BYTES / 1024 / 1024}MB each",
+                                                fontSize = 11.sp, color = colors.onSurfaceVariant,
+                                            )
                                         }
                                     }
                                 }
@@ -385,6 +507,30 @@ fun FirebaseBulkAddScreen(
                             }
                         }
 
+                        if (fileErrors.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = colors.error.copy(alpha = 0.1f),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text(
+                                        "Skipped files (${fileErrors.size}):",
+                                        fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                                        color = colors.error,
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    fileErrors.take(8).forEach { e ->
+                                        Text("• $e", fontSize = 10.sp, color = colors.onBackground)
+                                    }
+                                    if (fileErrors.size > 8) {
+                                        Text("+${fileErrors.size - 8} more", fontSize = 10.sp, color = colors.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                        }
+
                         if (error != null) {
                             Spacer(Modifier.height(12.dp))
                             Text(
@@ -419,6 +565,7 @@ fun FirebaseBulkAddScreen(
                     onCancel = {
                         extracted.clear()
                         selected.clear()
+                        fileErrors = emptyList()
                         phase = BulkPhase.IDLE
                         error = null
                     },
@@ -471,6 +618,7 @@ fun FirebaseBulkAddScreen(
                     onDone = {
                         extracted.clear()
                         selected.clear()
+                        fileErrors = emptyList()
                         phase = BulkPhase.IDLE
                         failureList = emptyList()
                         addedCount = 0
@@ -496,6 +644,7 @@ fun FirebaseBulkAddScreen(
                         scope.launch {
                             phase = BulkPhase.EXTRACTING
                             error = null
+                            fileErrors = emptyList()
                             extracted.clear()
                             selected.clear()
                             try {
@@ -508,8 +657,8 @@ fun FirebaseBulkAddScreen(
                                 extracted.addAll(urls)
                                 selected.addAll(urls.map { true })
                                 phase = BulkPhase.PREVIEW
-                            } catch (e: Exception) {
-                                error = "Extract failed: ${e.message}"
+                            } catch (e: Throwable) {
+                                error = "Extract failed: ${e.message ?: e.javaClass.simpleName}"
                                 phase = BulkPhase.IDLE
                             }
                         }
@@ -549,6 +698,20 @@ fun FirebaseBulkAddScreen(
                 }
             },
         )
+    }
+}
+
+// ============================================================
+//  HELPERS
+// ============================================================
+private fun queryDisplayName(context: Context, uri: Uri): String? {
+    return try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
+        }
+    } catch (_: Exception) {
+        null
     }
 }
 
