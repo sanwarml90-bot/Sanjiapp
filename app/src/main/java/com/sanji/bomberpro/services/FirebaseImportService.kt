@@ -15,6 +15,7 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -44,50 +45,73 @@ class FirebaseImportService {
         .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
-    private val defaultUrlRegex = Regex("""https?://[^\s<>"')\]}\]+""")
+    /**
+     * Safe URL-extraction regex.
+     * Matches http:// or https:// followed by one-or-more characters that are
+     * NOT whitespace, NOT angle brackets, NOT quotes, NOT backtick.
+     *
+     * Trailing punctuation is stripped AFTER matching (see extractUrls).
+     *
+     * No square brackets or parentheses inside the negated set — cannot be
+     * misread by the regex engine and cannot raise "missing closing bracket".
+     */
+    private val defaultUrlRegex = Regex("""https?://[^\s<>"'`]+""")
 
     private val excludedHosts = listOf(
-        "t.me", "telegram", "github.com", "githubusercontent",
+        "t.me", "telegram.org", "telegram.me",
+        "github.com", "githubusercontent.com",
         "youtube.com", "youtu.be",
+        "play.google.com", "apps.apple.com",
+    )
+
+    private val urlTrailingTrim = charArrayOf(
+        '.', ',', ';', ':', '!', '?', ')', ']', '}', '"', '\'', '`',
     )
 
     // ============================================================
-    //  EXTRACT
+    //  EXTRACT — bulletproof
     // ============================================================
     fun extractUrls(text: String, customPattern: String? = null): List<String> {
+        if (text.isBlank()) return emptyList()
+
         val regex = try {
             if (!customPattern.isNullOrBlank()) Regex(customPattern) else defaultUrlRegex
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "custom url pattern invalid — falling back to default", e)
             defaultUrlRegex
         }
-        val matches = regex.findAll(text)
-        val seen = HashSet<String>()
-        val out = mutableListOf<String>()
-        for (m in matches) {
-            var u = m.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}', '"', '\'')
-            if (u.isBlank()) continue
-            try {
-                val host = Uri.parse(u).host?.lowercase() ?: continue
-                if (excludedHosts.any { host.contains(it) }) continue
+
+        val seen = LinkedHashSet<String>()
+        for (match in regex.findAll(text)) {
+            var u = match.value.trim()
+            // Strip trailing punctuation that's virtually never part of a URL
+            u = u.trimEnd(*urlTrailingTrim)
+            if (u.isEmpty()) continue
+
+            val host = try {
+                Uri.parse(u).host?.lowercase()
             } catch (_: Exception) {
-                continue
-            }
-            if (u in seen) continue
+                null
+            } ?: continue
+            if (host.isBlank()) continue
+            if (excludedHosts.any { host.contains(it) }) continue
+
             seen.add(u)
-            out.add(u)
         }
-        return out
+        return seen.toList()
     }
 
     // ============================================================
-    //  READ URI
+    //  READ URI (file)
     // ============================================================
     suspend fun readUriText(
         uri: Uri,
         contentResolver: ContentResolver,
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            val text = contentResolver.openInputStream(uri)
+                ?.bufferedReader()
+                ?.use { it.readText() }
                 ?: return@withContext Result.failure(Exception("Cannot open file"))
             if (text.length > 50 * 1024 * 1024) {
                 return@withContext Result.failure(Exception("File too large (>50MB)"))
@@ -99,7 +123,7 @@ class FirebaseImportService {
     }
 
     // ============================================================
-    //  VALIDATE — separate step, cancelable
+    //  VALIDATE — concurrent, cancelable
     // ============================================================
     suspend fun validateUrls(
         urls: List<String>,
@@ -107,10 +131,17 @@ class FirebaseImportService {
         cancel: AtomicBoolean,
         onProgress: suspend (current: Int, total: Int, valid: Int, failed: Int) -> Unit,
     ): ValidationResult = withContext(Dispatchers.IO) {
-        val toCheck = urls.filter { it.trimEnd('/') !in existingUrls }
+        // Normalize incoming list before any check
+        val normalized = urls
+            .map { it.trim().trimEnd('/') }
+            .filter { it.isNotBlank() }
+            .distinct()
+
+        val toCheck = normalized.filter { it.lowercase() !in existingUrls }
         if (toCheck.isEmpty()) {
             return@withContext ValidationResult(valid = emptyList(), failed = emptyList())
         }
+
         val valid = java.util.Collections.synchronizedList(mutableListOf<String>())
         val failed = java.util.Collections.synchronizedList(mutableListOf<Pair<String, String>>())
         val counter = AtomicInteger(0)
@@ -123,8 +154,12 @@ class FirebaseImportService {
                     sem.withPermit {
                         if (cancel.get()) return@withPermit
                         val res = checkFirebaseUrl(url)
-                        if (res.isSuccess) valid.add(url.trimEnd('/'))
-                        else failed.add(url to categorizeFailure(res.exceptionOrNull()?.message ?: "unknown"))
+                        if (res.isSuccess) {
+                            valid.add(url)
+                        } else {
+                            val reason = res.exceptionOrNull()?.message ?: "unknown"
+                            failed.add(url to categorizeFailure(reason))
+                        }
                         val c = counter.incrementAndGet()
                         if (c % 5 == 0 || c == toCheck.size) {
                             onProgress(c, toCheck.size, valid.size, failed.size)
@@ -142,12 +177,14 @@ class FirebaseImportService {
     }
 
     // ============================================================
-    //  LOAD EXISTING
+    //  LOAD EXISTING (normalized lowercase without trailing slash)
     // ============================================================
     suspend fun loadExistingUrls(): Set<String> = withContext(Dispatchers.IO) {
         try {
             db.collection(FirebaseConfig.COL_FIREBASES).get().await()
-                .documents.mapNotNull { it.getString("url")?.trimEnd('/') }
+                .documents.mapNotNull {
+                    it.getString("url")?.trim()?.trimEnd('/')?.lowercase()
+                }
                 .toSet()
         } catch (_: Exception) {
             emptySet()
@@ -155,29 +192,67 @@ class FirebaseImportService {
     }
 
     // ============================================================
-    //  INSERT
+    //  DETERMINISTIC DOC ID from normalized URL
+    // ============================================================
+    private fun firebaseDocId(url: String): String {
+        val normalized = url.trim().trimEnd('/').lowercase()
+        return try {
+            val md = MessageDigest.getInstance("SHA-256")
+            val digest = md.digest(normalized.toByteArray(Charsets.UTF_8))
+            val sb = StringBuilder(digest.size * 2)
+            for (b in digest) {
+                val v = b.toInt() and 0xFF
+                sb.append(HEX[v ushr 4])
+                sb.append(HEX[v and 0x0F])
+            }
+            sb.toString().take(28)
+        } catch (_: Exception) {
+            // Fallback — still deterministic within a session
+            normalized.hashCode().toString()
+        }
+    }
+
+    // ============================================================
+    //  INSERT — idempotent, pre-checked, batched
     // ============================================================
     suspend fun insertValidated(
         adminUid: String,
         validUrls: List<String>,
     ): Result<Int> = withContext(Dispatchers.IO) {
         try {
-            val unique = validUrls.toSet().toList()
+            val unique = validUrls
+                .map { it.trim().trimEnd('/') }
+                .filter { it.isNotBlank() }
+                .distinct()
+
+            if (unique.isEmpty()) return@withContext Result.success(0)
+
             var inserted = 0
+            var skipped = 0
             var batch = db.batch()
             var inBatch = 0
+
             for (url in unique) {
-                val id = generateFirebaseId()
-                val ref = db.collection(FirebaseConfig.COL_FIREBASES).document(id)
+                val docId = firebaseDocId(url)
+                val ref = db.collection(FirebaseConfig.COL_FIREBASES).document(docId)
+
+                // Pre-check — prevents duplicate insertion under concurrent admin action
+                val existingSnap = try { ref.get().await() } catch (_: Exception) { null }
+                if (existingSnap != null && existingSnap.exists()) {
+                    skipped++
+                    continue
+                }
+
                 val label = try {
                     Uri.parse(url).host?.take(30) ?: "Firebase"
                 } catch (_: Exception) {
                     "Firebase"
                 }
+
                 batch.set(
                     ref,
                     mapOf(
-                        "id" to id,
+                        "id" to docId,
                         "url" to url,
                         "label" to label,
                         "enabled" to true,
@@ -186,12 +261,14 @@ class FirebaseImportService {
                 )
                 inserted++
                 inBatch++
+
                 if (inBatch >= 400) {
                     batch.commit().await()
                     batch = db.batch()
                     inBatch = 0
                 }
             }
+
             if (inBatch > 0) batch.commit().await()
 
             try {
@@ -201,7 +278,7 @@ class FirebaseImportService {
                         "action" to "fb_bulk_import",
                         "targetUid" to "",
                         "amount" to 0L,
-                        "reason" to "added=$inserted",
+                        "reason" to "inserted=$inserted skipped=$skipped",
                         "ts" to System.currentTimeMillis() / 1000L,
                     )
                 ).await()
@@ -275,12 +352,15 @@ class FirebaseImportService {
     }
 
     // ============================================================
-    //  VALIDATE SINGLE
+    //  VALIDATE SINGLE URL — distinguish network vs. HTTP errors
     // ============================================================
     private suspend fun checkFirebaseUrl(url: String): Result<Unit> = withContext(Dispatchers.IO) {
-        val cleanUrl = url.trimEnd('/')
+        val cleanUrl = url.trim().trimEnd('/')
         try {
-            val req = Request.Builder().url("$cleanUrl/clients.json?shallow=true").get().build()
+            val req = Request.Builder()
+                .url("$cleanUrl/clients.json?shallow=true")
+                .get()
+                .build()
             http.newCall(req).execute().use { resp ->
                 when {
                     resp.isSuccessful -> Result.success(Unit)
@@ -298,6 +378,8 @@ class FirebaseImportService {
                 m.contains("timeout") -> "timeout"
                 m.contains("unknown host") || m.contains("dns") -> "network"
                 m.contains("ssl") || m.contains("certificate") -> "network"
+                m.contains("unable to resolve") -> "network"
+                m.contains("failed to connect") -> "network"
                 else -> "network"
             }
             Result.failure(Exception(reason))
@@ -319,10 +401,8 @@ class FirebaseImportService {
     private fun esc(s: String): String =
         s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
 
-    private fun generateFirebaseId(): String =
-        "${System.currentTimeMillis()}${(100..999).random()}"
-
     companion object {
         private const val TAG = "FirebaseImportService"
+        private val HEX = "0123456789abcdef".toCharArray()
     }
 }
