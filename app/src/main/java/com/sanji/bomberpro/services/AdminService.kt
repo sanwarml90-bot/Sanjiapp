@@ -258,15 +258,19 @@ class AdminService {
             if (amount <= 0) return@withContext false
             val ref = db.collection(FirebaseConfig.COL_USERS).document(uid)
             try {
-                val snap = ref.get().await()
-                val current = (snap.getLong("credits") ?: 0L).toInt()
-                if (current < amount) return@withContext false
-                val manual = (snap.getLong("manualAddedCredits") ?: 0L).toInt()
-                val cut = minOf(amount, manual)
-                ref.update(
-                    "credits", (current - amount).toLong(),
-                    "manualAddedCredits", (manual - cut).toLong().coerceAtLeast(0L),
-                ).await()
+                db.runTransaction { txn ->
+                    val snap = txn.get(ref)
+                    val current = (snap.getLong("credits") ?: 0L).toInt()
+                    if (current < amount) throw IllegalStateException("INSUFFICIENT_CREDITS")
+                    val manual = (snap.getLong("manualAddedCredits") ?: 0L).toInt()
+                    val cut = minOf(amount, manual).coerceAtLeast(0)
+                    txn.update(
+                        ref,
+                        "credits", (current - amount).toLong(),
+                        "manualAddedCredits", (manual - cut).toLong().coerceAtLeast(0L),
+                    )
+                    Unit
+                }.await()
                 logTransaction(uid, "credit_deduct", -amount, "admin-deduct")
                 logAudit(adminUid, "admin_credit_deduct", uid, amount, "")
                 true
@@ -297,15 +301,19 @@ class AdminService {
             if (amount <= 0) return@withContext false
             val ref = db.collection(FirebaseConfig.COL_USERS).document(uid)
             try {
-                val snap = ref.get().await()
-                val current = (snap.getLong("coins") ?: 0L).toInt()
-                if (current < amount) return@withContext false
-                val manual = (snap.getLong("manualAddedCoins") ?: 0L).toInt()
-                val cut = minOf(amount, manual)
-                ref.update(
-                    "coins", (current - amount).toLong(),
-                    "manualAddedCoins", (manual - cut).toLong().coerceAtLeast(0L),
-                ).await()
+                db.runTransaction { txn ->
+                    val snap = txn.get(ref)
+                    val current = (snap.getLong("coins") ?: 0L).toInt()
+                    if (current < amount) throw IllegalStateException("INSUFFICIENT_COINS")
+                    val manual = (snap.getLong("manualAddedCoins") ?: 0L).toInt()
+                    val cut = minOf(amount, manual).coerceAtLeast(0)
+                    txn.update(
+                        ref,
+                        "coins", (current - amount).toLong(),
+                        "manualAddedCoins", (manual - cut).toLong().coerceAtLeast(0L),
+                    )
+                    Unit
+                }.await()
                 logTransaction(uid, "coin_deduct", -amount, "admin-deduct")
                 logAudit(adminUid, "admin_coin_deduct", uid, amount, "")
                 true
