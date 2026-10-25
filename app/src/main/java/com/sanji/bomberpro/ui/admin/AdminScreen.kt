@@ -352,10 +352,13 @@ fun AdminScreen(
                                                 testResults = testResults - fb.id
                                                 scope.launch {
                                                     val res = rtdbService.testFirebase(fb)
-                                                    val msg = if (res.error != null) {
-                                                        "❌ ${res.error}"
-                                                    } else {
-                                                        "✅ ${res.deviceCount} devices registered"
+                                                    val msg = when {
+                                                        res.onlineClients > 0 ->
+                                                            "✅ ${res.onlineClients} online (${res.totalClients} total)"
+                                                        res.error != null ->
+                                                            "❌ ${res.error}"
+                                                        else ->
+                                                            "❌ 0 online"
                                                     }
                                                     testResults = testResults + (fb.id to msg)
                                                     testRunningFor = null
