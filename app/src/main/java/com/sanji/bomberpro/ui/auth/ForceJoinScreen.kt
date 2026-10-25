@@ -53,6 +53,7 @@ fun ForceJoinScreen(
     authManager: AuthManager,
     uid: String,
     userName: String,
+    isAdmin: Boolean = false,
     onVerified: () -> Unit,
     onSkip: () -> Unit,
 ) {
@@ -69,20 +70,30 @@ fun ForceJoinScreen(
     var joinedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     LaunchedEffect(Unit) {
+        // Owner / admin never blocked by force-join
+        if (isAdmin) {
+            onVerified()
+            return@LaunchedEffect
+        }
+
         loading = true
         val s = service.loadForceJoinState()
         state = s
 
-        if (s.enabled && s.channels.isNotEmpty()) {
-            val bypassed = service.isUserBypassed(uid)
-            val already = service.isUserVerified(uid)
-            if (bypassed || already) {
-                loading = false
-                onVerified()
-                return@LaunchedEffect
-            }
-            missing = service.getMissingChannels(uid, s.channels)
+        if (!s.enabled || s.channels.isEmpty()) {
+            loading = false
+            onVerified()
+            return@LaunchedEffect
         }
+
+        val bypassed = service.isUserBypassed(uid)
+        val already = service.isUserVerified(uid)
+        if (bypassed || already) {
+            loading = false
+            onVerified()
+            return@LaunchedEffect
+        }
+        missing = service.getMissingChannels(uid, s.channels)
         loading = false
     }
 
@@ -225,10 +236,11 @@ fun ForceJoinScreen(
                             timeoutSeconds = 20,
                         )
                         verifying = false
-                        if (result.isSuccess && result.getOrNull() == true) {
+                        if (result.isSuccess) {
+                            // Self-attest or bot-verified — both mean go through
                             onVerified()
                         } else {
-                            verifyError = "Not verified yet. Join all channels and tap again."
+                            verifyError = "Verification failed — check your connection and try again."
                         }
                     }
                 },
