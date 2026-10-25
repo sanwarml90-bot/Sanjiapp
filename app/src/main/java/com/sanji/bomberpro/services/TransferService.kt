@@ -24,19 +24,29 @@ class TransferService {
     private val db = FirebaseFirestore.getInstance()
     private val userData = UserDataService()
 
-    /** Find a user by exact telegram-style UID, email, or refer code. Returns null if not found. */
+    /** Find a user by username, UID, email, or refer code. Returns null if not found. */
     suspend fun findRecipient(query: String): TransferRecipient? = withContext(Dispatchers.IO) {
         try {
             val q = query.trim()
             if (q.isBlank()) return@withContext null
 
-            // try UID direct
+            // 1. try UID direct
             val uidSnap = db.collection(FirebaseConfig.COL_USERS).document(q).get().await()
             if (uidSnap.exists()) {
                 return@withContext parse(uidSnap.id, uidSnap.data ?: emptyMap())
             }
 
-            // try email
+            // 2. try username (case-insensitive, uses usernameLower index field)
+            val userSnap = db.collection(FirebaseConfig.COL_USERS)
+                .whereEqualTo("usernameLower", q.lowercase())
+                .limit(1)
+                .get().await()
+            if (!userSnap.isEmpty) {
+                val d = userSnap.documents.first()
+                return@withContext parse(d.id, d.data ?: emptyMap())
+            }
+
+            // 3. try email
             val emailSnap = db.collection(FirebaseConfig.COL_USERS)
                 .whereEqualTo("email", q.lowercase())
                 .limit(1)
@@ -46,7 +56,7 @@ class TransferService {
                 return@withContext parse(d.id, d.data ?: emptyMap())
             }
 
-            // try refer code
+            // 4. try refer code
             val codeSnap = db.collection(FirebaseConfig.COL_USERS)
                 .whereEqualTo("referCode", q.uppercase())
                 .limit(1)
