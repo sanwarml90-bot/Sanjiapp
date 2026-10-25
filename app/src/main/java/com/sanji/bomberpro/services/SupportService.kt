@@ -1,9 +1,7 @@
 package com.sanji.bomberpro.services
 
-import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
-import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -25,6 +23,13 @@ data class Ticket(
     val replies: List<TicketReply> = emptyList(),
 )
 
+/**
+ * Legacy support-appeal model.
+ * NOTE: distinct from `AppealRecord` in AppealService.
+ * This one is used by the Support ticket/ban-appeal flow.
+ * Writes to `support_appeals` collection (NOT `appeals`).
+ * The newer `appeals` collection is reserved for AppealService.
+ */
 data class Appeal(
     val id: String = "",
     val uid: String = "",
@@ -36,9 +41,10 @@ data class Appeal(
 
 class SupportService {
 
-    private val db: FirebaseFirestore = FirebaseFirestore.getInstance()
+    private val db = FirebaseFirestore.getInstance()
     private val ticketsCol get() = db.collection("tickets")
-    private val appealsCol get() = db.collection("appeals")
+    // Separate collection — avoids schema collision with AppealService's `appeals`.
+    private val appealsCol get() = db.collection("support_appeals")
 
     // ============================================================
     //  TICKETS
@@ -110,7 +116,7 @@ class SupportService {
                     "ts" to now,
                 )
                 ticketsCol.document(ticketId).update(
-                    "replies", FieldValue.arrayUnion(reply),
+                    "replies", com.google.firebase.firestore.FieldValue.arrayUnion(reply),
                     "lastUpdate", now,
                 ).await()
                 true
@@ -149,7 +155,7 @@ class SupportService {
     }
 
     // ============================================================
-    //  APPEALS
+    //  APPEALS (support-style, distinct collection)
     // ============================================================
     suspend fun submitAppeal(uid: String, userName: String, text: String): Result<String> =
         withContext(Dispatchers.IO) {
