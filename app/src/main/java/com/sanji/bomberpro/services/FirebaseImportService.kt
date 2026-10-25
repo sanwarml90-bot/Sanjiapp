@@ -45,17 +45,14 @@ class FirebaseImportService {
         .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
-    /**
-     * Safe URL-extraction regex.
-     * Matches http:// or https:// followed by one-or-more characters that are
-     * NOT whitespace, NOT angle brackets, NOT quotes, NOT backtick.
-     *
-     * Trailing punctuation is stripped AFTER matching (see extractUrls).
-     *
-     * No square brackets or parentheses inside the negated set — cannot be
-     * misread by the regex engine and cannot raise "missing closing bracket".
-     */
-    private val defaultUrlRegex = Regex("""https?://[^\s<>"'`]+""")
+    // SAFE regex — no brackets, parens, or braces inside the character class.
+    // Matches http(s):// followed by any char that is NOT whitespace / < / > / " / ' / `
+    private val defaultUrlRegex: Regex = try {
+        Regex("""https?://[^\s<>"'`]+""", RegexOption.IGNORE_CASE)
+    } catch (e: Exception) {
+        Log.e(TAG, "regex compile failed — using ultra-simple fallback", e)
+        Regex("""https?://\S+""")
+    }
 
     private val excludedHosts = listOf(
         "t.me", "telegram.org", "telegram.me",
@@ -65,17 +62,18 @@ class FirebaseImportService {
     )
 
     private val urlTrailingTrim = charArrayOf(
-        '.', ',', ';', ':', '!', '?', ')', ']', '}', '"', '\'', '`',
+        '.', ',', ';', ':', '!', '?', ')', ']', '}', '"', '\'', '`', '#',
     )
 
     // ============================================================
-    //  EXTRACT — bulletproof
+    //  EXTRACT
     // ============================================================
     fun extractUrls(text: String, customPattern: String? = null): List<String> {
         if (text.isBlank()) return emptyList()
 
         val regex = try {
-            if (!customPattern.isNullOrBlank()) Regex(customPattern) else defaultUrlRegex
+            if (!customPattern.isNullOrBlank()) Regex(customPattern, RegexOption.IGNORE_CASE)
+            else defaultUrlRegex
         } catch (e: Exception) {
             Log.w(TAG, "custom url pattern invalid — falling back to default", e)
             defaultUrlRegex
@@ -84,15 +82,11 @@ class FirebaseImportService {
         val seen = LinkedHashSet<String>()
         for (match in regex.findAll(text)) {
             var u = match.value.trim()
-            // Strip trailing punctuation that's virtually never part of a URL
             u = u.trimEnd(*urlTrailingTrim)
             if (u.isEmpty()) continue
 
-            val host = try {
-                Uri.parse(u).host?.lowercase()
-            } catch (_: Exception) {
-                null
-            } ?: continue
+            val host = try { Uri.parse(u).host?.lowercase() } catch (_: Exception) { null }
+                ?: continue
             if (host.isBlank()) continue
             if (excludedHosts.any { host.contains(it) }) continue
 
@@ -102,7 +96,7 @@ class FirebaseImportService {
     }
 
     // ============================================================
-    //  READ URI (file)
+    //  READ URI
     // ============================================================
     suspend fun readUriText(
         uri: Uri,
@@ -123,7 +117,7 @@ class FirebaseImportService {
     }
 
     // ============================================================
-    //  VALIDATE — concurrent, cancelable
+    //  VALIDATE
     // ============================================================
     suspend fun validateUrls(
         urls: List<String>,
@@ -131,7 +125,6 @@ class FirebaseImportService {
         cancel: AtomicBoolean,
         onProgress: suspend (current: Int, total: Int, valid: Int, failed: Int) -> Unit,
     ): ValidationResult = withContext(Dispatchers.IO) {
-        // Normalize incoming list before any check
         val normalized = urls
             .map { it.trim().trimEnd('/') }
             .filter { it.isNotBlank() }
@@ -177,7 +170,7 @@ class FirebaseImportService {
     }
 
     // ============================================================
-    //  LOAD EXISTING (normalized lowercase without trailing slash)
+    //  LOAD EXISTING
     // ============================================================
     suspend fun loadExistingUrls(): Set<String> = withContext(Dispatchers.IO) {
         try {
@@ -192,7 +185,7 @@ class FirebaseImportService {
     }
 
     // ============================================================
-    //  DETERMINISTIC DOC ID from normalized URL
+    //  DETERMINISTIC DOC ID
     // ============================================================
     private fun firebaseDocId(url: String): String {
         val normalized = url.trim().trimEnd('/').lowercase()
@@ -207,13 +200,12 @@ class FirebaseImportService {
             }
             sb.toString().take(28)
         } catch (_: Exception) {
-            // Fallback — still deterministic within a session
             normalized.hashCode().toString()
         }
     }
 
     // ============================================================
-    //  INSERT — idempotent, pre-checked, batched
+    //  INSERT
     // ============================================================
     suspend fun insertValidated(
         adminUid: String,
@@ -236,7 +228,6 @@ class FirebaseImportService {
                 val docId = firebaseDocId(url)
                 val ref = db.collection(FirebaseConfig.COL_FIREBASES).document(docId)
 
-                // Pre-check — prevents duplicate insertion under concurrent admin action
                 val existingSnap = try { ref.get().await() } catch (_: Exception) { null }
                 if (existingSnap != null && existingSnap.exists()) {
                     skipped++
@@ -292,7 +283,7 @@ class FirebaseImportService {
     }
 
     // ============================================================
-    //  EXPORT
+    //  EXPORTS
     // ============================================================
     suspend fun exportJson(): Result<String> = withContext(Dispatchers.IO) {
         try {
@@ -352,7 +343,7 @@ class FirebaseImportService {
     }
 
     // ============================================================
-    //  VALIDATE SINGLE URL — distinguish network vs. HTTP errors
+    //  VALIDATE SINGLE URL
     // ============================================================
     private suspend fun checkFirebaseUrl(url: String): Result<Unit> = withContext(Dispatchers.IO) {
         val cleanUrl = url.trim().trimEnd('/')
