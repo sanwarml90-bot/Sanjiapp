@@ -69,6 +69,7 @@ import com.sanji.bomberpro.ui.support.SupportScreen
 import com.sanji.bomberpro.ui.templates.TemplatesScreen
 import com.sanji.bomberpro.ui.wallet.GiftScreen
 import com.sanji.bomberpro.ui.wallet.TransferScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 object Routes {
@@ -117,17 +118,14 @@ fun SanjiNavGraph(
     var permissionsGranted by remember { mutableStateOf(false) }
     var userForceJoinOk by remember { mutableStateOf(false) }
 
-    // app lock state
     var appLocked by remember { mutableStateOf(false) }
     var appLockMessage by remember { mutableStateOf("") }
     var appLockApkUrl by remember { mutableStateOf("") }
     var ownerBypass by remember { mutableStateOf(false) }
 
-    // force update state
     var forceUpdateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var forceUpdateBlocking by remember { mutableStateOf(false) }
 
-    // One-shot force update check on app open
     LaunchedEffect(Unit) {
         try {
             val info = forceUpdateService.checkForUpdate()
@@ -150,7 +148,6 @@ fun SanjiNavGraph(
         try { permissionsGranted = deviceInfoService.hasAllPermissions() }
         catch (_: Exception) { permissionsGranted = false }
 
-        // app lock
         try {
             val lockState = appLockService.getState()
             val isOwner = logged.role.priority >= UserRole.OWNER.priority
@@ -175,7 +172,6 @@ fun SanjiNavGraph(
             forceJoinEnabled = false
         }
 
-        // Resolve actual force-join status for this user — fixes BUG 3 + BUG 12
         try {
             userForceJoinOk = if (!forceJoinEnabled) true else {
                 forceJoinService.isUserVerified(logged.user.uid) ||
@@ -197,14 +193,25 @@ fun SanjiNavGraph(
             (loggedIn.profile?.termsAccepted != true ||
                     (loggedIn.profile?.termsVersion ?: 0) < termsVersion)
 
-    // Re-drive navigation from SPLASH once gates are loaded. Fixes BUG 2.
+    // Re-drive from SPLASH: handles LoggedOut → LOGIN, and LoggedIn + gateLoaded → gate chain
     LaunchedEffect(gateLoaded, authState) {
-        if (!gateLoaded) return@LaunchedEffect
-        if (appLocked) return@LaunchedEffect
         val currentRoute = try {
             navController.currentBackStackEntry?.destination?.route
         } catch (_: Exception) { null } ?: return@LaunchedEffect
         if (currentRoute != Routes.SPLASH) return@LaunchedEffect
+
+        if (authState is AuthState.LoggedOut) {
+            try {
+                navController.navigate(Routes.LOGIN) {
+                    popUpTo(Routes.SPLASH) { inclusive = true }
+                }
+            } catch (_: Exception) {}
+            return@LaunchedEffect
+        }
+
+        if (authState !is AuthState.LoggedIn) return@LaunchedEffect
+        if (!gateLoaded) return@LaunchedEffect
+        if (appLocked) return@LaunchedEffect
 
         val target = computeInitialRoute(
             authState = authState,
@@ -222,7 +229,22 @@ fun SanjiNavGraph(
         }
     }
 
-    // Force update blocking overlay — sits above everything
+    // Safety net — if splash is somehow still showing after 4s and nothing moved, force to login
+    LaunchedEffect(Unit) {
+        delay(4000)
+        try {
+            val r = navController.currentBackStackEntry?.destination?.route
+            if (r == Routes.SPLASH) {
+                val isLoggedIn = authState is AuthState.LoggedIn
+                if (!isLoggedIn) {
+                    navController.navigate(Routes.LOGIN) {
+                        popUpTo(Routes.SPLASH) { inclusive = true }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
     if (forceUpdateBlocking && forceUpdateInfo != null) {
         ForceUpdateBlockingOverlay(
             info = forceUpdateInfo!!,
@@ -238,7 +260,6 @@ fun SanjiNavGraph(
         return
     }
 
-    // app-lock overlay — hard block non-owners
     if (appLocked && !ownerBypass) {
         AppLockedScreen(
             message = appLockMessage,
@@ -284,25 +305,38 @@ fun SanjiNavGraph(
         composable(Routes.SPLASH) {
             SplashScreen(
                 onFinished = {
-                    if (!gateLoaded) {
-                        // Wait for gate LaunchedEffect to fire
-                        return@SplashScreen
-                    }
-                    val target = computeInitialRoute(
-                        authState = authState,
-                        gateLoaded = gateLoaded,
-                        needsTerms = needsTerms,
-                        userForceJoinOk = userForceJoinOk,
-                        forceJoinEnabled = forceJoinEnabled,
-                        permissionsGranted = permissionsGranted,
-                        appLocked = appLocked,
-                    )
-                    if (target != Routes.SPLASH) {
-                        try {
-                            navController.navigate(target) {
-                                popUpTo(Routes.SPLASH) { inclusive = true }
+                    // Route out of splash on animation end — covers all auth states.
+                    when (authState) {
+                        is AuthState.LoggedOut, is AuthState.Initializing -> {
+                            try {
+                                navController.navigate(Routes.LOGIN) {
+                                    popUpTo(Routes.SPLASH) { inclusive = true }
+                                }
+                            } catch (_: Exception) {}
+                        }
+                        is AuthState.LoggedIn -> {
+                            if (!gateLoaded) {
+                                // Wait for gate LaunchedEffect to complete — do nothing here
+                                return@SplashScreen
                             }
-                        } catch (_: Exception) {}
+                            val target = computeInitialRoute(
+                                authState = authState,
+                                gateLoaded = gateLoaded,
+                                needsTerms = needsTerms,
+                                userForceJoinOk = userForceJoinOk,
+                                forceJoinEnabled = forceJoinEnabled,
+                                permissionsGranted = permissionsGranted,
+                                appLocked = appLocked,
+                            )
+                            if (target != Routes.SPLASH) {
+                                try {
+                                    navController.navigate(target) {
+                                        popUpTo(Routes.SPLASH) { inclusive = true }
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                        }
+                        else -> {}
                     }
                 }
             )
@@ -464,7 +498,6 @@ fun SanjiNavGraph(
             val logged = authState as? AuthState.LoggedIn
             val gwId = backStackEntry.arguments?.getString("gwId") ?: ""
             if (logged != null && gwId.isNotBlank()) {
-                // BUG 3 fix — resolve real verification status, not hardcoded true
                 var verified by remember { mutableStateOf(!forceJoinEnabled) }
                 LaunchedEffect(Unit) {
                     verified = try {
@@ -557,7 +590,9 @@ private fun computeInitialRoute(
             !permissionsGranted -> Routes.PERMISSIONS
             else -> Routes.HOME
         }
-        else -> Routes.LOGIN
+        is AuthState.LoggedOut -> Routes.LOGIN
+        is AuthState.Initializing -> Routes.SPLASH
+        is AuthState.Error -> Routes.LOGIN
     }
 }
 
