@@ -1,6 +1,7 @@
 package com.sanji.bomberpro.services
 
 import android.util.Log
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.sanji.bomberpro.FirebaseConfig
@@ -11,39 +12,19 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
-/**
- * Force-join gate logic.
- *
- * Reality: only the bot (with admin rights in those channels) can verify
- * real Telegram membership. The app cannot check membership directly.
- *
- * Flow:
- *  1. App reads force_join config from Firestore (settings/global.forceJoinEnabled +
- *     force_join/channels collection).
- *  2. If enabled, user is shown Join buttons → deep-links to Telegram.
- *  3. User taps "I Joined" → app writes join_check_request/{uid}.
- *  4. Bot (payment_bot.py or main bot) listens, verifies membership for each
- *     channel via Telegram Bot API, writes users/{uid}.forceJoinVerified = true/false.
- *  5. App polls users/{uid}.forceJoinVerified every 2s for up to 20s.
- *  6. If verified → proceed. If not → show "not joined yet, try again".
- *
- * If bot doesn't have the verification listener running, user is stuck.
- * To avoid that, admin can:
- *  - leave forceJoinEnabled = false (default)
- *  - or manually set forceJoinVerified = true for a user
- */
 class ForceJoinService {
 
     private val db = FirebaseFirestore.getInstance()
+
+    private val settingsRef get() = db.collection(FirebaseConfig.COL_SETTINGS)
+        .document(FirebaseConfig.DOC_GLOBAL_SETTINGS)
 
     // ============================================================
     //  CONFIG READ
     // ============================================================
     suspend fun loadForceJoinState(): ForceJoinState = withContext(Dispatchers.IO) {
         try {
-            val settingsDoc = db.collection(FirebaseConfig.COL_SETTINGS)
-                .document(FirebaseConfig.DOC_GLOBAL_SETTINGS)
-                .get().await()
+            val settingsDoc = settingsRef.get().await()
 
             val enabled = settingsDoc.getBoolean("forceJoinEnabled") ?: false
             if (!enabled) {
@@ -80,6 +61,38 @@ class ForceJoinService {
         }
     }
 
+    /** Always returns channels + bypass, regardless of enabled flag. For admin screen. */
+    suspend fun listAll(): ForceJoinState = withContext(Dispatchers.IO) {
+        try {
+            val settingsDoc = settingsRef.get().await()
+            val enabled = settingsDoc.getBoolean("forceJoinEnabled") ?: false
+
+            val channelsSnap = db.collection(FirebaseConfig.COL_FORCE_JOIN)
+                .get().await()
+
+            val channels = channelsSnap.documents.mapNotNull { d ->
+                val id = d.getString("id") ?: d.id
+                val title = d.getString("title") ?: ""
+                val link = d.getString("link") ?: ""
+                if (id.isBlank() || link.isBlank()) return@mapNotNull null
+                ForceJoinChannel(
+                    id = id,
+                    title = title,
+                    link = link,
+                    required = d.getBoolean("required") ?: true,
+                )
+            }
+
+            val bypassSnap = settingsDoc.get("forceJoinBypass") as? List<*> ?: emptyList<Any>()
+            val bypass = bypassSnap.map { it.toString() }
+
+            ForceJoinState(enabled = enabled, channels = channels, bypass = bypass)
+        } catch (e: Exception) {
+            Log.w(TAG, "listAll failed", e)
+            ForceJoinState(enabled = false)
+        }
+    }
+
     // ============================================================
     //  CURRENT USER FLAG
     // ============================================================
@@ -95,9 +108,7 @@ class ForceJoinService {
 
     suspend fun isUserBypassed(uid: String): Boolean = withContext(Dispatchers.IO) {
         try {
-            val snap = db.collection(FirebaseConfig.COL_SETTINGS)
-                .document(FirebaseConfig.DOC_GLOBAL_SETTINGS)
-                .get().await()
+            val snap = settingsRef.get().await()
             val bypass = snap.get("forceJoinBypass") as? List<*> ?: emptyList<Any>()
             bypass.any { it.toString() == uid }
         } catch (e: Exception) {
@@ -108,13 +119,6 @@ class ForceJoinService {
     // ============================================================
     //  REQUEST VERIFICATION (user taps "I Joined")
     // ============================================================
-    /**
-     * Writes a check request. Bot picks it up, verifies, writes back
-     * `users/{uid}.forceJoinVerified`.
-     *
-     * Returns true only if bot verified within `timeoutSeconds`.
-     * If no bot listener is running, times out after timeout and returns false.
-     */
     suspend fun requestVerification(
         uid: String,
         userName: String,
@@ -137,7 +141,6 @@ class ForceJoinService {
             while (System.currentTimeMillis() < deadline) {
                 delay(2000)
 
-                // check user doc
                 val userSnap = db.collection(FirebaseConfig.COL_USERS).document(uid).get().await()
                 val verified = userSnap.getBoolean("forceJoinVerified") ?: false
                 if (verified) {
@@ -145,7 +148,6 @@ class ForceJoinService {
                     return@withContext Result.success(true)
                 }
 
-                // check request doc for rejection
                 val reqSnap = reqRef.get().await()
                 val reqStatus = reqSnap.getString("status") ?: "pending"
                 if (reqStatus == "rejected") {
@@ -162,14 +164,8 @@ class ForceJoinService {
     }
 
     // ============================================================
-    //  LIST MISSING CHANNELS (for UI display)
+    //  LIST MISSING CHANNELS
     // ============================================================
-    /**
-     * Bot tracks per-channel membership in `users/{uid}.forceJoinMemberOf` array.
-     * App compares against the configured channel list to show which to join.
-     *
-     * If bot never populated that field, returns all channels as "join".
-     */
     suspend fun getMissingChannels(uid: String, all: List<ForceJoinChannel>): List<ForceJoinChannel> =
         withContext(Dispatchers.IO) {
             try {
@@ -181,6 +177,111 @@ class ForceJoinService {
                 all
             }
         }
+
+    // ============================================================
+    //  ADMIN WRITE — CHANNELS
+    // ============================================================
+    suspend fun addChannel(
+        id: String,
+        title: String,
+        link: String,
+        required: Boolean = true,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val cleanId = id.trim()
+            val cleanLink = link.trim()
+            val cleanTitle = title.trim().take(80)
+            if (cleanId.isBlank()) return@withContext Result.failure(Exception("Channel ID required"))
+            if (cleanLink.isBlank() || !cleanLink.startsWith("http")) {
+                return@withContext Result.failure(Exception("Valid link required (must start with http)"))
+            }
+            val existing = db.collection(FirebaseConfig.COL_FORCE_JOIN)
+                .whereEqualTo("id", cleanId)
+                .limit(1).get().await()
+            if (!existing.isEmpty) {
+                return@withContext Result.failure(Exception("Channel already added"))
+            }
+            val ref = db.collection(FirebaseConfig.COL_FORCE_JOIN).document()
+            ref.set(
+                mapOf(
+                    "id" to cleanId,
+                    "title" to cleanTitle.ifBlank { cleanId },
+                    "link" to cleanLink,
+                    "required" to required,
+                    "addedAt" to System.currentTimeMillis() / 1000L,
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun removeChannel(channelId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val snap = db.collection(FirebaseConfig.COL_FORCE_JOIN)
+                .whereEqualTo("id", channelId)
+                .limit(1).get().await()
+            if (snap.isEmpty) return@withContext false
+            snap.documents.first().reference.delete().await()
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun setForceJoinEnabled(enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
+        try {
+            settingsRef.set(
+                mapOf("forceJoinEnabled" to enabled),
+                SetOptions.merge(),
+            ).await()
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // ============================================================
+    //  ADMIN WRITE — BYPASS
+    // ============================================================
+    suspend fun addBypass(uid: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val clean = uid.trim()
+            if (clean.isBlank()) return@withContext false
+            settingsRef.set(
+                mapOf("forceJoinBypass" to FieldValue.arrayUnion(clean)),
+                SetOptions.merge(),
+            ).await()
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun removeBypass(uid: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val clean = uid.trim()
+            if (clean.isBlank()) return@withContext false
+            settingsRef.set(
+                mapOf("forceJoinBypass" to FieldValue.arrayRemove(clean)),
+                SetOptions.merge(),
+            ).await()
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun getBypassList(): List<String> = withContext(Dispatchers.IO) {
+        try {
+            val snap = settingsRef.get().await()
+            val bypass = snap.get("forceJoinBypass") as? List<*> ?: emptyList<Any>()
+            bypass.map { it.toString() }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
 
     companion object {
         private const val TAG = "ForceJoinService"
