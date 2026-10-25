@@ -8,8 +8,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -21,10 +26,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -34,6 +43,8 @@ import com.sanji.bomberpro.data.UserRole
 import com.sanji.bomberpro.services.AppLockService
 import com.sanji.bomberpro.services.DeviceInfoService
 import com.sanji.bomberpro.services.ForceJoinService
+import com.sanji.bomberpro.services.ForceUpdateService
+import com.sanji.bomberpro.services.UpdateInfo
 import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import com.sanji.bomberpro.theme.ThemeManager
@@ -54,6 +65,7 @@ import com.sanji.bomberpro.ui.permissions.PermissionGateScreen
 import com.sanji.bomberpro.ui.refer.ReferScreen
 import com.sanji.bomberpro.ui.settings.UserSettingsScreen
 import com.sanji.bomberpro.ui.splash.SplashScreen
+import com.sanji.bomberpro.ui.support.SupportScreen
 import com.sanji.bomberpro.ui.templates.TemplatesScreen
 import com.sanji.bomberpro.ui.wallet.GiftScreen
 import com.sanji.bomberpro.ui.wallet.TransferScreen
@@ -79,6 +91,7 @@ object Routes {
     const val ANNOUNCEMENTS = "announcements"
     const val USER_SETTINGS = "user_settings"
     const val APPEAL = "appeal"
+    const val SUPPORT = "support"
 }
 
 @Composable
@@ -94,6 +107,7 @@ fun SanjiNavGraph(
     val forceJoinService = remember { ForceJoinService() }
     val deviceInfoService = remember { DeviceInfoService(context) }
     val appLockService = remember { AppLockService() }
+    val forceUpdateService = remember { ForceUpdateService() }
     val scope = rememberCoroutineScope()
 
     var termsVersion by remember { mutableStateOf(1) }
@@ -101,6 +115,7 @@ fun SanjiNavGraph(
     var forceJoinEnabled by remember { mutableStateOf(false) }
     var gateLoaded by remember { mutableStateOf(false) }
     var permissionsGranted by remember { mutableStateOf(false) }
+    var userForceJoinOk by remember { mutableStateOf(false) }
 
     // app lock state
     var appLocked by remember { mutableStateOf(false) }
@@ -108,8 +123,27 @@ fun SanjiNavGraph(
     var appLockApkUrl by remember { mutableStateOf("") }
     var ownerBypass by remember { mutableStateOf(false) }
 
+    // force update state
+    var forceUpdateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+    var forceUpdateBlocking by remember { mutableStateOf(false) }
+
+    // One-shot force update check on app open
+    LaunchedEffect(Unit) {
+        try {
+            val info = forceUpdateService.checkForUpdate()
+            if (info != null && info.isForceUpdate() && info.apkUrl.isNotBlank()) {
+                forceUpdateInfo = info
+                forceUpdateBlocking = true
+            }
+        } catch (_: Exception) {}
+    }
+
     LaunchedEffect(authState) {
-        val logged = authState as? AuthState.LoggedIn ?: return@LaunchedEffect
+        val logged = authState as? AuthState.LoggedIn
+        if (logged == null) {
+            gateLoaded = false
+            return@LaunchedEffect
+        }
         gateLoaded = false
         ownerBypass = false
 
@@ -124,6 +158,7 @@ fun SanjiNavGraph(
                 appLocked = true
                 appLockMessage = lockState.message
                 appLockApkUrl = lockState.apkUrl
+                gateLoaded = true
                 return@LaunchedEffect
             } else {
                 appLocked = false
@@ -140,6 +175,16 @@ fun SanjiNavGraph(
             forceJoinEnabled = false
         }
 
+        // Resolve actual force-join status for this user — fixes BUG 3 + BUG 12
+        try {
+            userForceJoinOk = if (!forceJoinEnabled) true else {
+                forceJoinService.isUserVerified(logged.user.uid) ||
+                        forceJoinService.isUserBypassed(logged.user.uid)
+            }
+        } catch (_: Exception) {
+            userForceJoinOk = !forceJoinEnabled
+        }
+
         gateLoaded = true
 
         if (permissionsGranted) {
@@ -151,6 +196,47 @@ fun SanjiNavGraph(
     val needsTerms = gateLoaded && loggedIn != null && !appLocked && termsRequired &&
             (loggedIn.profile?.termsAccepted != true ||
                     (loggedIn.profile?.termsVersion ?: 0) < termsVersion)
+
+    // Re-drive navigation from SPLASH once gates are loaded. Fixes BUG 2.
+    LaunchedEffect(gateLoaded, authState) {
+        if (!gateLoaded) return@LaunchedEffect
+        if (appLocked) return@LaunchedEffect
+        val currentRoute = try {
+            navController.currentBackStackEntry?.destination?.route
+        } catch (_: Exception) { null } ?: return@LaunchedEffect
+        if (currentRoute != Routes.SPLASH) return@LaunchedEffect
+
+        val target = computeInitialRoute(
+            authState = authState,
+            gateLoaded = gateLoaded,
+            needsTerms = needsTerms,
+            userForceJoinOk = userForceJoinOk,
+            forceJoinEnabled = forceJoinEnabled,
+            permissionsGranted = permissionsGranted,
+            appLocked = appLocked,
+        )
+        if (target != Routes.SPLASH) {
+            try {
+                navController.navigate(target) { popUpTo(Routes.SPLASH) { inclusive = true } }
+            } catch (_: Exception) {}
+        }
+    }
+
+    // Force update blocking overlay — sits above everything
+    if (forceUpdateBlocking && forceUpdateInfo != null) {
+        ForceUpdateBlockingOverlay(
+            info = forceUpdateInfo!!,
+            onUpdate = {
+                try {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(forceUpdateInfo!!.apkUrl))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                } catch (_: Exception) {}
+            },
+        )
+        return
+    }
 
     // app-lock overlay — hard block non-owners
     if (appLocked && !ownerBypass) {
@@ -170,8 +256,8 @@ fun SanjiNavGraph(
         return
     }
 
-    // top-level nav: Login → gate → Home
-    LaunchedEffect(authState, gateLoaded, needsTerms, forceJoinEnabled, permissionsGranted, appLocked) {
+    // LOGIN → gate chain
+    LaunchedEffect(authState, gateLoaded, needsTerms, forceJoinEnabled, userForceJoinOk, permissionsGranted, appLocked) {
         val logged = authState as? AuthState.LoggedIn ?: return@LaunchedEffect
         if (!gateLoaded) return@LaunchedEffect
         if (appLocked) return@LaunchedEffect
@@ -184,9 +270,7 @@ fun SanjiNavGraph(
 
         val target = when {
             needsTerms -> Routes.TERMS
-            forceJoinEnabled &&
-                    !forceJoinService.isUserBypassed(logged.user.uid) &&
-                    !forceJoinService.isUserVerified(logged.user.uid) -> Routes.FORCE_JOIN
+            forceJoinEnabled && !userForceJoinOk -> Routes.FORCE_JOIN
             !permissionsGranted -> Routes.PERMISSIONS
             else -> Routes.HOME
         }
@@ -200,14 +284,26 @@ fun SanjiNavGraph(
         composable(Routes.SPLASH) {
             SplashScreen(
                 onFinished = {
+                    if (!gateLoaded) {
+                        // Wait for gate LaunchedEffect to fire
+                        return@SplashScreen
+                    }
                     val target = computeInitialRoute(
                         authState = authState,
                         gateLoaded = gateLoaded,
                         needsTerms = needsTerms,
+                        userForceJoinOk = userForceJoinOk,
                         forceJoinEnabled = forceJoinEnabled,
                         permissionsGranted = permissionsGranted,
+                        appLocked = appLocked,
                     )
-                    navController.navigate(target) { popUpTo(Routes.SPLASH) { inclusive = true } }
+                    if (target != Routes.SPLASH) {
+                        try {
+                            navController.navigate(target) {
+                                popUpTo(Routes.SPLASH) { inclusive = true }
+                            }
+                        } catch (_: Exception) {}
+                    }
                 }
             )
         }
@@ -225,9 +321,7 @@ fun SanjiNavGraph(
                             termsRequired = s.termsRequired
                             forceJoinEnabled = s.forceJoinEnabled
                             val next = when {
-                                forceJoinEnabled &&
-                                        !forceJoinService.isUserBypassed(loggedIn.user.uid) &&
-                                        !forceJoinService.isUserVerified(loggedIn.user.uid) -> Routes.FORCE_JOIN
+                                forceJoinEnabled && !userForceJoinOk -> Routes.FORCE_JOIN
                                 !permissionsGranted -> Routes.PERMISSIONS
                                 else -> Routes.HOME
                             }
@@ -251,6 +345,7 @@ fun SanjiNavGraph(
                     uid = loggedIn.user.uid,
                     userName = loggedIn.profile?.displayName ?: (loggedIn.user.displayName ?: "User"),
                     onVerified = {
+                        userForceJoinOk = true
                         val next = if (!permissionsGranted) Routes.PERMISSIONS else Routes.HOME
                         navController.navigate(next) { popUpTo(Routes.FORCE_JOIN) { inclusive = true } }
                     },
@@ -369,10 +464,21 @@ fun SanjiNavGraph(
             val logged = authState as? AuthState.LoggedIn
             val gwId = backStackEntry.arguments?.getString("gwId") ?: ""
             if (logged != null && gwId.isNotBlank()) {
+                // BUG 3 fix — resolve real verification status, not hardcoded true
+                var verified by remember { mutableStateOf(!forceJoinEnabled) }
+                LaunchedEffect(Unit) {
+                    verified = try {
+                        if (!forceJoinEnabled) true
+                        else forceJoinService.isUserVerified(logged.user.uid) ||
+                                forceJoinService.isUserBypassed(logged.user.uid)
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
                 GiveawayDetailScreen(
                     gwId = gwId,
                     uid = logged.user.uid,
-                    isForceJoinVerified = true,
+                    isForceJoinVerified = verified,
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -419,6 +525,17 @@ fun SanjiNavGraph(
                 )
             }
         }
+
+        composable(Routes.SUPPORT) {
+            val logged = authState as? AuthState.LoggedIn
+            if (logged != null) {
+                SupportScreen(
+                    uid = logged.user.uid,
+                    userName = logged.profile?.displayName ?: (logged.user.displayName ?: "User"),
+                    onBack = { navController.popBackStack() },
+                )
+            }
+        }
     }
 }
 
@@ -426,17 +543,88 @@ private fun computeInitialRoute(
     authState: AuthState,
     gateLoaded: Boolean,
     needsTerms: Boolean,
+    userForceJoinOk: Boolean,
     forceJoinEnabled: Boolean,
     permissionsGranted: Boolean,
+    appLocked: Boolean,
 ): String {
+    if (appLocked) return Routes.SPLASH
     return when (authState) {
         is AuthState.LoggedIn -> when {
-            !gateLoaded -> Routes.HOME
+            !gateLoaded -> Routes.SPLASH
             needsTerms -> Routes.TERMS
-            forceJoinEnabled -> Routes.FORCE_JOIN
+            forceJoinEnabled && !userForceJoinOk -> Routes.FORCE_JOIN
             !permissionsGranted -> Routes.PERMISSIONS
             else -> Routes.HOME
         }
         else -> Routes.LOGIN
+    }
+}
+
+@Composable
+private fun ForceUpdateBlockingOverlay(
+    info: UpdateInfo,
+    onUpdate: () -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    Dialog(
+        onDismissRequest = { /* not dismissable */ },
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+        ),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = colors.surface,
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    "⚠️ Update Required",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Black,
+                    color = colors.error,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "A new version (${info.latestVersion}) is available. You must update to continue.",
+                    fontSize = 13.sp,
+                    color = colors.onBackground,
+                    textAlign = TextAlign.Center,
+                )
+                if (info.changelog.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        info.changelog,
+                        fontSize = 12.sp,
+                        color = colors.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = onUpdate,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.primary,
+                        contentColor = Color.Black,
+                    ),
+                ) {
+                    Text("⬇️ Update Now", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Current version: ${info.currentVersion}",
+                    fontSize = 10.sp,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
