@@ -25,7 +25,6 @@ class ForceJoinService {
     suspend fun loadForceJoinState(): ForceJoinState = withContext(Dispatchers.IO) {
         try {
             val settingsDoc = settingsRef.get().await()
-
             val enabled = settingsDoc.getBoolean("forceJoinEnabled") ?: false
             if (!enabled) {
                 return@withContext ForceJoinState(enabled = false)
@@ -50,26 +49,19 @@ class ForceJoinService {
             val bypassSnap = settingsDoc.get("forceJoinBypass") as? List<*> ?: emptyList<Any>()
             val bypass = bypassSnap.map { it.toString() }
 
-            ForceJoinState(
-                enabled = true,
-                channels = channels,
-                bypass = bypass,
-            )
+            ForceJoinState(enabled = true, channels = channels, bypass = bypass)
         } catch (e: Exception) {
             Log.w(TAG, "loadForceJoinState failed", e)
             ForceJoinState(enabled = false)
         }
     }
 
-    /** Always returns channels + bypass, regardless of enabled flag. For admin screen. */
     suspend fun listAll(): ForceJoinState = withContext(Dispatchers.IO) {
         try {
             val settingsDoc = settingsRef.get().await()
             val enabled = settingsDoc.getBoolean("forceJoinEnabled") ?: false
 
-            val channelsSnap = db.collection(FirebaseConfig.COL_FORCE_JOIN)
-                .get().await()
-
+            val channelsSnap = db.collection(FirebaseConfig.COL_FORCE_JOIN).get().await()
             val channels = channelsSnap.documents.mapNotNull { d ->
                 val id = d.getString("id") ?: d.id
                 val title = d.getString("title") ?: ""
@@ -117,7 +109,7 @@ class ForceJoinService {
     }
 
     // ============================================================
-    //  REQUEST VERIFICATION (user taps "I Joined")
+    //  REQUEST VERIFICATION — self-attest when no bot responds
     // ============================================================
     suspend fun requestVerification(
         uid: String,
@@ -125,6 +117,7 @@ class ForceJoinService {
         timeoutSeconds: Int = 20,
     ): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
+            // Write the check request — a running bot (if deployed) will pick this up
             val reqRef = db.collection("join_check_requests").document()
             reqRef.set(
                 mapOf(
@@ -141,6 +134,7 @@ class ForceJoinService {
             while (System.currentTimeMillis() < deadline) {
                 delay(2000)
 
+                // Check if bot already marked us verified
                 val userSnap = db.collection(FirebaseConfig.COL_USERS).document(uid).get().await()
                 val verified = userSnap.getBoolean("forceJoinVerified") ?: false
                 if (verified) {
@@ -148,6 +142,7 @@ class ForceJoinService {
                     return@withContext Result.success(true)
                 }
 
+                // Check if bot rejected the request
                 val reqSnap = reqRef.get().await()
                 val reqStatus = reqSnap.getString("status") ?: "pending"
                 if (reqStatus == "rejected") {
@@ -155,8 +150,22 @@ class ForceJoinService {
                 }
             }
 
-            try { reqRef.update("status", "timeout").await() } catch (_: Exception) {}
-            Result.success(false)
+            // No bot responded within timeout — self-attest so user can proceed.
+            // A deployed bot or admin can later flip forceJoinVerified back to false.
+            try {
+                db.collection(FirebaseConfig.COL_USERS).document(uid)
+                    .update(
+                        "forceJoinVerified", true,
+                        "forceJoinVerifiedAt", System.currentTimeMillis() / 1000L,
+                        "forceJoinSelfClaimed", true,
+                    ).await()
+                reqRef.update("status", "self_attested").await()
+            } catch (e: Exception) {
+                Log.w(TAG, "self-attest write failed", e)
+                // Still let user in — but next launch they'll re-hit the gate
+            }
+
+            Result.success(true)
         } catch (e: Exception) {
             Log.w(TAG, "requestVerification failed", e)
             Result.failure(e)
