@@ -95,7 +95,6 @@ fun TransferScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = {
                     if (view == TransferView.SUCCESS) {
-                        // reset
                         view = TransferView.FORM
                         query = ""
                         recipient = null
@@ -128,7 +127,6 @@ fun TransferScreen(
 
                     Spacer(Modifier.height(16.dp))
 
-                    // currency picker
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         CurrencyChip(
                             label = "💰 Credits",
@@ -159,9 +157,8 @@ fun TransferScreen(
                     Spacer(Modifier.height(20.dp))
 
                     if (recipient == null) {
-                        // step 1: find recipient
                         Text(
-                            "Enter recipient UID, email, or refer code",
+                            "Enter recipient username, UID, email, or refer code",
                             fontSize = 11.sp,
                             color = colors.onSurfaceVariant,
                         )
@@ -169,7 +166,7 @@ fun TransferScreen(
                         OutlinedTextField(
                             value = query,
                             onValueChange = { query = it.trim() },
-                            placeholder = { Text("UID or email or SJXXXXXX") },
+                            placeholder = { Text("username · UID · email · SJXXXXXX") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -213,7 +210,6 @@ fun TransferScreen(
                             }
                         }
                     } else {
-                        // step 2: recipient confirmed — input amount
                         val r = recipient!!
                         val available = if (currency == TransferCurrency.CREDITS) credits else coins
                         val maxAllowed = if (currency == TransferCurrency.CREDITS)
@@ -275,7 +271,6 @@ fun TransferScreen(
 
                         Spacer(Modifier.height(8.dp))
 
-                        // quick amount buttons
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             QuickAmount("10%", (maxAllowed * 10 / 100).coerceAtLeast(1)) { amountText = it.toString() }
                             QuickAmount("25%", (maxAllowed * 25 / 100).coerceAtLeast(1)) { amountText = it.toString() }
