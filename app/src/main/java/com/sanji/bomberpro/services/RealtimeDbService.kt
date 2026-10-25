@@ -57,14 +57,14 @@ class RealtimeDbService {
 
     private val http: OkHttpClient = run {
         val dispatcher = Dispatcher().apply {
-            maxRequests = 100
-            maxRequestsPerHost = 100
+            maxRequests = 200
+            maxRequestsPerHost = 200
         }
         OkHttpClient.Builder()
-            .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(8, TimeUnit.SECONDS)
-            .writeTimeout(5, TimeUnit.SECONDS)
-            .callTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(4, TimeUnit.SECONDS)
+            .readTimeout(6, TimeUnit.SECONDS)
+            .writeTimeout(4, TimeUnit.SECONDS)
+            .callTimeout(8, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
             .dispatcher(dispatcher)
             .build()
@@ -77,6 +77,7 @@ class RealtimeDbService {
         private const val TAG = "RealtimeDbService"
         private const val SCAN_CACHE_MS = 5 * 60 * 1000L
         private const val EMPTY_SCAN_CACHE_MS = 15 * 1000L
+        private const val PER_FIREBASE_TIMEOUT_MS = 8_000L
     }
 
     private data class ScanCache(
@@ -189,7 +190,7 @@ class RealtimeDbService {
     }
 
     // ============================================================
-    //  SCAN ALL
+    //  SCAN ALL — per-firebase timeout, partial success preserved
     // ============================================================
     suspend fun scanAll(
         firebases: List<FirebaseNode>,
@@ -213,33 +214,44 @@ class RealtimeDbService {
 
         Log.d(TAG, "scanAll: fresh scan of ${firebases.size} firebase(s)")
 
-        val deviceSem = Semaphore(100)
+        // Higher concurrency — 200 parallel device fetches
+        val deviceSem = Semaphore(200)
 
-        val result = withTimeoutOrNull(45_000L) {
-            coroutineScope {
-                firebases.mapIndexed { idx, fb ->
-                    async {
-                        try {
+        val allFound = java.util.Collections.synchronizedList(mutableListOf<Device>())
+        var successCount = 0
+        var failedCount = 0
+
+        coroutineScope {
+            val jobs = firebases.mapIndexed { idx, fb ->
+                async(Dispatchers.IO) {
+                    try {
+                        val partial = withTimeoutOrNull(PER_FIREBASE_TIMEOUT_MS) {
                             scanFirebase(fb, deviceSem) { count ->
-                                onProgress?.invoke(idx, count)
+                                onProgress?.invoke(idx, allFound.size)
                             }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            Log.w(TAG, "scanFirebase crashed: ${fb.label}", e)
-                            emptyList<Device>()
                         }
+                        if (partial == null) {
+                            Log.w(TAG, "scan timeout for ${fb.label} after ${PER_FIREBASE_TIMEOUT_MS / 1000}s")
+                            failedCount++
+                        } else {
+                            allFound.addAll(partial)
+                            successCount++
+                            onProgress?.invoke(idx, allFound.size)
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "scanFirebase crashed: ${fb.label}", e)
+                        failedCount++
                     }
-                }.awaitAll().flatten()
+                }
             }
+            jobs.awaitAll()
         }
 
-        val final = result ?: run {
-            Log.w(TAG, "scanAll timed out after 45s")
-            emptyList()
-        }
+        val final = allFound.toList()
+        Log.d(TAG, "scanAll done: ${final.size} device(s) from $successCount ok / $failedCount failed firebase(s)")
 
-        Log.d(TAG, "scanAll done: ${final.size} online device(s)")
         scanCache[key] = ScanCache(final, System.currentTimeMillis())
         final
     }
