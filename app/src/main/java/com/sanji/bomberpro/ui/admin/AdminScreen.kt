@@ -62,6 +62,7 @@ import com.sanji.bomberpro.services.AppLockService
 import com.sanji.bomberpro.services.AppLockState
 import com.sanji.bomberpro.services.DataExportService
 import com.sanji.bomberpro.services.FirebaseImportService
+import com.sanji.bomberpro.services.RealtimeDbService
 import com.sanji.bomberpro.services.SettingsService
 import com.sanji.bomberpro.services.SupportService
 import com.sanji.bomberpro.theme.LocalSanjiColors
@@ -93,12 +94,16 @@ fun AdminScreen(
     val lockService = remember { AppLockService() }
     val supportService = remember { SupportService() }
     val exportService = remember { DataExportService(context) }
+    val rtdbService = remember { RealtimeDbService() }
 
     var view by remember { mutableStateOf(AdminView.HOME) }
 
     var firebases by remember { mutableStateOf<List<FirebaseNode>>(emptyList()) }
     var loadingFb by remember { mutableStateOf(false) }
     var showAddFb by remember { mutableStateOf(false) }
+
+    var testResults by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var testRunningFor by remember { mutableStateOf<String?>(null) }
 
     var users by remember { mutableStateOf<List<AdminUser>>(emptyList()) }
     var userQuery by remember { mutableStateOf("") }
@@ -295,6 +300,8 @@ fun AdminScreen(
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(firebases) { fb ->
                         val idx = firebases.indexOf(fb) + 1
+                        val testResult = testResults[fb.id]
+                        val isTestingThis = testRunningFor == fb.id
                         Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(12.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -322,6 +329,59 @@ fun AdminScreen(
                                         Icon(Icons.Default.Delete, "Delete", tint = colors.error)
                                     }
                                 }
+
+                                Spacer(Modifier.height(6.dp))
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(
+                                        onClick = {
+                                            if (!isTestingThis) {
+                                                testRunningFor = fb.id
+                                                testResults = testResults - fb.id
+                                                scope.launch {
+                                                    val res = rtdbService.testFirebase(fb)
+                                                    val msg = if (res.error != null) {
+                                                        "❌ ${res.error}"
+                                                    } else {
+                                                        "✅ ${res.deviceCount} devices registered"
+                                                    }
+                                                    testResults = testResults + (fb.id to msg)
+                                                    testRunningFor = null
+                                                }
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = colors.primary.copy(alpha = 0.12f),
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                "🔍 Test",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = colors.primary,
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    if (isTestingThis) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 1.5.dp,
+                                            color = colors.primary,
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("testing…", fontSize = 10.sp, color = colors.onSurfaceVariant)
+                                    } else if (testResult != null) {
+                                        Text(
+                                            testResult,
+                                            fontSize = 10.sp,
+                                            color = if (testResult.startsWith("✅")) colors.success else colors.error,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -343,7 +403,10 @@ fun AdminScreen(
             if (showFbPaste) {
                 BulkPasteFirebaseDialog(
                     text = fbPasteText,
-                    onTextChange = { fbPasteText = it },
+                    onTextChange = {
+                        fbPasteText = it
+                        if (fbPasteReport != null) fbPasteReport = null
+                    },
                     running = fbPasteRunning,
                     report = fbPasteReport,
                     onDismiss = {
@@ -367,8 +430,8 @@ fun AdminScreen(
                                     return@launch
                                 }
                                 val existing = importSvc.loadExistingUrls()
-                                val seenExisting = urls.count { it.trimEnd('/') in existing }
-                                val toCheck = urls.filter { it.trimEnd('/') !in existing }
+                                val seenExisting = urls.count { it.trimEnd('/').lowercase() in existing }
+                                val toCheck = urls.filter { it.trimEnd('/').lowercase() !in existing }
                                 if (toCheck.isEmpty()) {
                                     fbPasteReport = "Detected: ${urls.size}\nAlready added: $seenExisting\nNothing new to validate."
                                     fbPasteRunning = false
@@ -481,12 +544,6 @@ fun AdminScreen(
                                         Text(u.email, fontSize = 10.sp, color = colors.onSurfaceVariant, maxLines = 1)
                                     }
                                     Text("UID: ${u.uid}", fontSize = 9.sp, color = colors.onSurfaceVariant, fontFamily = FontFamily.Monospace)
-                                    if (u.sim1Number.isNotBlank() || u.sim2Number.isNotBlank()) {
-                                        Text(
-                                            "📱 ${listOfNotNull(u.sim1Number.takeIf { it.isNotBlank() }, u.sim2Number.takeIf { it.isNotBlank() }).joinToString(" / ")}",
-                                            fontSize = 9.sp, color = colors.primary, fontFamily = FontFamily.Monospace,
-                                        )
-                                    }
                                 }
                                 Text("💰${u.credits} 🪙${u.coins}", fontSize = 10.sp, color = colors.primary, fontWeight = FontWeight.SemiBold)
                             }
@@ -685,6 +742,14 @@ private fun VersionControlScreen(
                         Spacer(Modifier.height(8.dp))
                         Text("APK URL:", fontSize = 11.sp, color = colors.onSurfaceVariant)
                         Text(s.apkUrl, fontSize = 11.sp, color = colors.primary, fontFamily = FontFamily.Monospace)
+                    }
+                    if (s.lockedAt > 0) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Locked at: " + java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
+                                .format(java.util.Date(s.lockedAt * 1000L)),
+                            fontSize = 11.sp, color = colors.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -951,7 +1016,7 @@ private fun BulkPasteFirebaseDialog(
         confirmButton = {
             TextButton(
                 onClick = onSubmit,
-                enabled = !running && text.isNotBlank() && report == null,
+                enabled = !running && text.isNotBlank(),
             ) { Text("Import", color = colors.primary, fontWeight = FontWeight.Bold) }
         },
         dismissButton = {
@@ -965,32 +1030,44 @@ private fun BulkPasteFirebaseDialog(
         title = { Text("Bulk Paste URLs") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                if (report == null) {
-                    Text(
-                        "Paste any text containing URLs. Bot will extract, validate, and add valid ones.",
-                        fontSize = 11.sp, color = colors.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = text,
-                        onValueChange = onTextChange,
-                        placeholder = { Text("https://a.firebaseio.com\nhttps://b.firebasedatabase.app") },
-                        minLines = 6,
-                        maxLines = 12,
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !running,
-                    )
-                    Text("${text.length} chars", fontSize = 10.sp, color = colors.onSurfaceVariant)
-                    if (running) {
-                        Spacer(Modifier.height(10.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = colors.primary)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Validating + inserting…", fontSize = 12.sp, color = colors.onSurfaceVariant)
-                        }
+                Text(
+                    "Paste any text containing URLs. URLs are auto-detected, validated, and added.",
+                    fontSize = 11.sp, color = colors.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    placeholder = { Text("https://a.firebaseio.com\nhttps://b.firebasedatabase.app\n…paste any amount") },
+                    minLines = 6,
+                    maxLines = 12,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !running,
+                )
+                Text("${text.length} chars", fontSize = 10.sp, color = colors.onSurfaceVariant)
+                if (running) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = colors.primary)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Validating + inserting…", fontSize = 12.sp, color = colors.onSurfaceVariant)
                     }
-                } else {
-                    Text(report, fontSize = 12.sp, color = colors.onBackground, fontFamily = FontFamily.Monospace)
+                }
+                if (report != null) {
+                    Spacer(Modifier.height(12.dp))
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = colors.background,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            report,
+                            fontSize = 12.sp,
+                            color = colors.onBackground,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(10.dp),
+                        )
+                    }
                 }
             }
         },
