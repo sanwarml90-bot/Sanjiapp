@@ -30,18 +30,26 @@ class DataExportService(private val context: Context) {
 
     /**
      * Export full data as JSON to phone Downloads. Returns Uri.
-     * Collections exported: users (own), blasts (own), otp_fetches (own), transactions (own),
-     * settings/global, firebases, giveaways, apps.
-     * Admin-only collections (activity_log, audit_log, payment_log) are also exported for owner.
+     * Includes:
+     *  - firebases (always, masked-safe)
+     *  - global settings
+     *  - giveaways
+     *  - apps
+     *  - users (all if admin, self only otherwise)
+     *  - blasts (own records)
+     *  - otpFetches (own records)
+     *  - transactions (own records)
+     *  - auditLog (admin only)
      */
-    suspend fun exportFullData(isAdmin: Boolean): Uri? = withContext(Dispatchers.IO) {
+    suspend fun exportFullData(uid: String, isAdmin: Boolean): Uri? = withContext(Dispatchers.IO) {
         try {
             val root = JSONObject()
             root.put("appVersion", "1.0.0")
             root.put("exportedAt", System.currentTimeMillis() / 1000L)
             root.put("isAdmin", isAdmin)
+            root.put("uid", uid)
 
-            // firebases (always included — masked labels safe)
+            // firebases
             val firebasesArr = JSONArray()
             db.collection(FirebaseConfig.COL_FIREBASES).get().await().documents.forEach { d ->
                 firebasesArr.put(JSONObject(d.data ?: emptyMap<String, Any>()).apply { put("id", d.id) })
@@ -68,12 +76,66 @@ class DataExportService(private val context: Context) {
             }
             root.put("apps", appsArr)
 
+            // users
+            if (isAdmin) {
+                val usersArr = JSONArray()
+                db.collection(FirebaseConfig.COL_USERS).limit(5000).get().await().documents.forEach { d ->
+                    usersArr.put(JSONObject(d.data ?: emptyMap<String, Any>()).apply { put("id", d.id) })
+                }
+                root.put("users", usersArr)
+            } else {
+                val userDoc = db.collection(FirebaseConfig.COL_USERS).document(uid).get().await()
+                if (userDoc.exists()) {
+                    val selfArr = JSONArray()
+                    selfArr.put(JSONObject(userDoc.data ?: emptyMap<String, Any>()).apply { put("id", userDoc.id) })
+                    root.put("users", selfArr)
+                }
+            }
+
+            // blasts (own)
+            val blastsArr = JSONArray()
+            try {
+                db.collection(FirebaseConfig.COL_BLASTS)
+                    .whereEqualTo("uid", uid)
+                    .limit(5000)
+                    .get().await().documents.forEach { d ->
+                        blastsArr.put(JSONObject(d.data ?: emptyMap<String, Any>()).apply { put("id", d.id) })
+                    }
+            } catch (_: Exception) {}
+            root.put("blasts", blastsArr)
+
+            // otpFetches (own)
+            val otpsArr = JSONArray()
+            try {
+                db.collection(FirebaseConfig.COL_OTP_FETCHES)
+                    .whereEqualTo("uid", uid)
+                    .limit(5000)
+                    .get().await().documents.forEach { d ->
+                        otpsArr.put(JSONObject(d.data ?: emptyMap<String, Any>()).apply { put("id", d.id) })
+                    }
+            } catch (_: Exception) {}
+            root.put("otpFetches", otpsArr)
+
+            // transactions (own)
+            val txArr = JSONArray()
+            try {
+                db.collection(FirebaseConfig.COL_TRANSACTIONS)
+                    .whereEqualTo("uid", uid)
+                    .limit(5000)
+                    .get().await().documents.forEach { d ->
+                        txArr.put(JSONObject(d.data ?: emptyMap<String, Any>()).apply { put("id", d.id) })
+                    }
+            } catch (_: Exception) {}
+            root.put("transactions", txArr)
+
             // admin-only logs
             if (isAdmin) {
                 val audit = JSONArray()
-                db.collection(FirebaseConfig.COL_AUDIT_LOG).limit(5000).get().await().documents.forEach { d ->
-                    audit.put(JSONObject(d.data ?: emptyMap<String, Any>()).apply { put("id", d.id) })
-                }
+                try {
+                    db.collection(FirebaseConfig.COL_AUDIT_LOG).limit(5000).get().await().documents.forEach { d ->
+                        audit.put(JSONObject(d.data ?: emptyMap<String, Any>()).apply { put("id", d.id) })
+                    }
+                } catch (_: Exception) {}
                 root.put("auditLog", audit)
             }
 
