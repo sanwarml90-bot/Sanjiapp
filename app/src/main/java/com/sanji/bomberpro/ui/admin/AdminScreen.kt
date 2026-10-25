@@ -74,7 +74,7 @@ private enum class AdminView {
     SETTINGS, BROADCAST, REDEEM, PRICING,
     LOGS, ANALYTICS, VERSION_CONTROL,
     GIVEAWAY_LIST, GIVEAWAY_CREATE,
-    FORCE_JOIN, SUPPORT_ADMIN,
+    FORCE_JOIN, SUPPORT_ADMIN, PAYMENTS,
 }
 
 @Composable
@@ -112,13 +112,11 @@ fun AdminScreen(
     var showBulkAdd by remember { mutableStateOf(false) }
     var showBulkDeduct by remember { mutableStateOf(false) }
 
-    // Bulk-paste state for Manage Firebases
     var showFbPaste by remember { mutableStateOf(false) }
     var fbPasteText by remember { mutableStateOf("") }
     var fbPasteRunning by remember { mutableStateOf(false) }
     var fbPasteReport by remember { mutableStateOf<String?>(null) }
 
-    // Data export state
     var exporting by remember { mutableStateOf(false) }
 
     fun loadFirebases() {
@@ -156,6 +154,7 @@ fun AdminScreen(
             onOpenVersionControl = { view = AdminView.VERSION_CONTROL },
             onOpenForceJoin = { view = AdminView.FORCE_JOIN },
             onOpenSupport = { view = AdminView.SUPPORT_ADMIN },
+            onOpenPayments = { view = AdminView.PAYMENTS },
             onOpenBulkAdd = { showBulkAdd = true },
             onOpenBulkDeduct = { showBulkDeduct = true },
             onOpenExport = {
@@ -216,6 +215,18 @@ fun AdminScreen(
             onBack = { view = AdminView.HOME },
         )
 
+        AdminView.PAYMENTS -> {
+            if (isOwner) {
+                PaymentReviewScreen(
+                    adminUid = adminUid,
+                    service = adminService,
+                    onBack = { view = AdminView.HOME },
+                )
+            } else {
+                LaunchedEffect(Unit) { view = AdminView.HOME }
+            }
+        }
+
         AdminView.FIREBASE_BULK -> FirebaseBulkAddScreen(
             adminUid = adminUid,
             onBack = { view = AdminView.HOME },
@@ -245,7 +256,6 @@ fun AdminScreen(
                 }
             }
 
-            // Bulk paste button under header
             Surface(
                 onClick = { showFbPaste = true },
                 shape = RoundedCornerShape(12.dp),
@@ -467,7 +477,6 @@ fun AdminScreen(
                                         }
                                     }
                                     if (u.username.isNotBlank()) Text("@${u.username}", fontSize = 10.sp, color = colors.primary)
-                                    // Email visible only to owner
                                     if (isOwner && u.email.isNotBlank()) {
                                         Text(u.email, fontSize = 10.sp, color = colors.onSurfaceVariant, maxLines = 1)
                                     }
@@ -555,7 +564,6 @@ fun AdminScreen(
         }
 
         AdminView.LOGS -> {
-            // Owner-only — admin role can never reach this view
             if (isOwner) LogsScreen(onBack = { view = AdminView.HOME })
             else LaunchedEffect(Unit) { view = AdminView.HOME }
         }
@@ -678,14 +686,6 @@ private fun VersionControlScreen(
                         Text("APK URL:", fontSize = 11.sp, color = colors.onSurfaceVariant)
                         Text(s.apkUrl, fontSize = 11.sp, color = colors.primary, fontFamily = FontFamily.Monospace)
                     }
-                    if (s.lockedAt > 0) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Locked at: " + java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
-                                .format(java.util.Date(s.lockedAt * 1000L)),
-                            fontSize = 11.sp, color = colors.onSurfaceVariant,
-                        )
-                    }
                 }
             }
         }
@@ -713,12 +713,6 @@ private fun VersionControlScreen(
             ) {
                 Text("🛑 Stop This Version", fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Once locked, all users (except owner) will see a blocking screen telling them to update. Owner is exempt.",
-                fontSize = 11.sp, color = colors.onSurfaceVariant, textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth(),
-            )
         }
 
         if (error != null) {
@@ -729,8 +723,6 @@ private fun VersionControlScreen(
             Spacer(Modifier.height(12.dp))
             Text(success!!, color = colors.success, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
         }
-
-        Spacer(Modifier.height(24.dp))
     }
 
     if (showLockDialog) {
@@ -801,11 +793,10 @@ private fun LockDialog(
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    "All users (except owner) will be BLOCKED from using the app. They will see the message below and must update to a new version.",
+                    "All users (except owner) will be BLOCKED from using the app.",
                     fontSize = 11.sp, color = colors.error,
                 )
                 Spacer(Modifier.height(12.dp))
-
                 Text("Message shown to users:", fontSize = 11.sp, color = colors.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
@@ -815,7 +806,6 @@ private fun LockDialog(
                     maxLines = 5,
                     modifier = Modifier.fillMaxWidth(),
                 )
-
                 Spacer(Modifier.height(10.dp))
                 Text("New APK URL (optional):", fontSize = 11.sp, color = colors.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
@@ -826,7 +816,6 @@ private fun LockDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-
                 Spacer(Modifier.height(14.dp))
                 Text("Type STOP to confirm:", fontSize = 11.sp, color = colors.error, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
@@ -862,6 +851,7 @@ private fun AdminHomeMenu(
     onOpenVersionControl: () -> Unit,
     onOpenForceJoin: () -> Unit,
     onOpenSupport: () -> Unit,
+    onOpenPayments: () -> Unit,
     onOpenBulkAdd: () -> Unit,
     onOpenBulkDeduct: () -> Unit,
     onOpenExport: () -> Unit,
@@ -885,10 +875,13 @@ private fun AdminHomeMenu(
             AdminMenuCard("⚙️", "Settings", "OTP cost, referral rewards, UPI, maintenance, force update", onOpenSettings)
             AdminMenuCard("🔗", "Force Join", "Channels, bypass list, master toggle", onOpenForceJoin)
         }
-        AdminMenuCard("📩", "Support Tickets", "View and reply to user tickets & appeals", onOpenSupport)
+        AdminMenuCard("📩", "Support Tickets", "View and reply to user tickets", onOpenSupport)
+        if (isOwner) {
+            AdminMenuCard("💳", "Payment Review", "Approve/reject UPI payments — no Telegram bot needed", onOpenPayments)
+        }
         AdminMenuCard("🎁", "Giveaways", "Create, manage, end giveaways · vote adjust · leaderboard", onOpenGiveaways)
         AdminMenuCard("📢", "Broadcast", "Send message to all users", onOpenBroadcast)
-        AdminMenuCard("🎟", "Redeem Codes", "Create / view / delete codes", onOpenRedeem)
+        AdminMenuCard("🎟", "Redeem Codes", "Create / view / copy / delete codes", onOpenRedeem)
         if (isOwner) {
             AdminMenuCard("💳", "Pricing", "Manage credit packs and subscription plans", onOpenPricing)
             AdminMenuCard("🛑", "Version Control", "Stop app for all users · force update", onOpenVersionControl)
@@ -981,7 +974,7 @@ private fun BulkPasteFirebaseDialog(
                     OutlinedTextField(
                         value = text,
                         onValueChange = onTextChange,
-                        placeholder = { Text("https://a.firebaseio.com\nhttps://b.firebasedatabase.app\n…paste any amount") },
+                        placeholder = { Text("https://a.firebaseio.com\nhttps://b.firebasedatabase.app") },
                         minLines = 6,
                         maxLines = 12,
                         modifier = Modifier.fillMaxWidth(),
