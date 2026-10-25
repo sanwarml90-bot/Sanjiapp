@@ -75,7 +75,7 @@ private enum class AdminView {
     SETTINGS, BROADCAST, REDEEM, PRICING,
     LOGS, ANALYTICS, VERSION_CONTROL,
     GIVEAWAY_LIST, GIVEAWAY_CREATE,
-    FORCE_JOIN, SUPPORT_ADMIN, PAYMENTS,
+    FORCE_JOIN, SUPPORT_ADMIN, PAYMENTS, APPEALS,
 }
 
 @Composable
@@ -160,6 +160,7 @@ fun AdminScreen(
             onOpenForceJoin = { view = AdminView.FORCE_JOIN },
             onOpenSupport = { view = AdminView.SUPPORT_ADMIN },
             onOpenPayments = { view = AdminView.PAYMENTS },
+            onOpenAppeals = { view = AdminView.APPEALS },
             onOpenBulkAdd = { showBulkAdd = true },
             onOpenBulkDeduct = { showBulkDeduct = true },
             onOpenExport = {
@@ -225,6 +226,17 @@ fun AdminScreen(
                 PaymentReviewScreen(
                     adminUid = adminUid,
                     service = adminService,
+                    onBack = { view = AdminView.HOME },
+                )
+            } else {
+                LaunchedEffect(Unit) { view = AdminView.HOME }
+            }
+        }
+
+        AdminView.APPEALS -> {
+            if (isOwner) {
+                AppealsAdminScreen(
+                    adminUid = adminUid,
                     onBack = { view = AdminView.HOME },
                 )
             } else {
@@ -917,6 +929,7 @@ private fun AdminHomeMenu(
     onOpenForceJoin: () -> Unit,
     onOpenSupport: () -> Unit,
     onOpenPayments: () -> Unit,
+    onOpenAppeals: () -> Unit,
     onOpenBulkAdd: () -> Unit,
     onOpenBulkDeduct: () -> Unit,
     onOpenExport: () -> Unit,
@@ -943,6 +956,7 @@ private fun AdminHomeMenu(
         AdminMenuCard("📩", "Support Tickets", "View and reply to user tickets", onOpenSupport)
         if (isOwner) {
             AdminMenuCard("💳", "Payment Review", "Approve/reject UPI payments — no Telegram bot needed", onOpenPayments)
+            AdminMenuCard("🔓", "Appeals", "Ban appeals from banned users", onOpenAppeals)
         }
         AdminMenuCard("🎁", "Giveaways", "Create, manage, end giveaways · vote adjust · leaderboard", onOpenGiveaways)
         AdminMenuCard("📢", "Broadcast", "Send message to all users", onOpenBroadcast)
