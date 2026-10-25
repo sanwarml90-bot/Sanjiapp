@@ -1,8 +1,7 @@
 package com.sanji.bomberpro.ui.admin
 
+import android.content.Intent
 import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -60,16 +60,21 @@ import com.sanji.bomberpro.services.AdminService
 import com.sanji.bomberpro.services.AdminUser
 import com.sanji.bomberpro.services.AppLockService
 import com.sanji.bomberpro.services.AppLockState
+import com.sanji.bomberpro.services.DataExportService
+import com.sanji.bomberpro.services.FirebaseImportService
 import com.sanji.bomberpro.services.SettingsService
+import com.sanji.bomberpro.services.SupportService
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 private enum class AdminView {
     HOME, FIREBASE, FIREBASE_BULK, USERS, USER_DETAIL, USER_SMS_HISTORY, ROLES,
     SETTINGS, BROADCAST, REDEEM, PRICING,
     LOGS, ANALYTICS, VERSION_CONTROL,
     GIVEAWAY_LIST, GIVEAWAY_CREATE,
+    FORCE_JOIN, SUPPORT_ADMIN,
 }
 
 @Composable
@@ -82,9 +87,12 @@ fun AdminScreen(
 ) {
     val colors = LocalSanjiColors.current
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val adminService = remember { AdminService() }
     val settingsService = remember { SettingsService() }
     val lockService = remember { AppLockService() }
+    val supportService = remember { SupportService() }
+    val exportService = remember { DataExportService(context) }
 
     var view by remember { mutableStateOf(AdminView.HOME) }
 
@@ -104,10 +112,14 @@ fun AdminScreen(
     var showBulkAdd by remember { mutableStateOf(false) }
     var showBulkDeduct by remember { mutableStateOf(false) }
 
-    var pendingFileUris by remember { mutableStateOf<List<Uri>?>(null) }
-    val multiFilePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents(),
-    ) { uris -> if (uris.isNotEmpty()) pendingFileUris = uris }
+    // Bulk-paste state for Manage Firebases
+    var showFbPaste by remember { mutableStateOf(false) }
+    var fbPasteText by remember { mutableStateOf("") }
+    var fbPasteRunning by remember { mutableStateOf(false) }
+    var fbPasteReport by remember { mutableStateOf<String?>(null) }
+
+    // Data export state
+    var exporting by remember { mutableStateOf(false) }
 
     fun loadFirebases() {
         scope.launch {
@@ -142,8 +154,35 @@ fun AdminScreen(
             onOpenAnalytics = { view = AdminView.ANALYTICS },
             onOpenGiveaways = { view = AdminView.GIVEAWAY_LIST },
             onOpenVersionControl = { view = AdminView.VERSION_CONTROL },
+            onOpenForceJoin = { view = AdminView.FORCE_JOIN },
+            onOpenSupport = { view = AdminView.SUPPORT_ADMIN },
             onOpenBulkAdd = { showBulkAdd = true },
             onOpenBulkDeduct = { showBulkDeduct = true },
+            onOpenExport = {
+                if (exporting) return@AdminHomeMenu
+                exporting = true
+                scope.launch {
+                    try {
+                        val uri = exportService.exportFullData(adminUid, isOwner)
+                        exporting = false
+                        if (uri != null) {
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "application/json"
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            try {
+                                context.startActivity(Intent.createChooser(intent, "Share export"))
+                            } catch (_: Exception) {}
+                        } else {
+                            error = "Export failed"
+                        }
+                    } catch (e: Exception) {
+                        exporting = false
+                        error = "Export failed: ${e.message}"
+                    }
+                }
+            },
             onExit = onExit,
         )
 
@@ -165,16 +204,22 @@ fun AdminScreen(
             onCreated = { success = "Giveaway created"; view = AdminView.GIVEAWAY_LIST },
         )
 
+        AdminView.FORCE_JOIN -> ForceJoinAdminScreen(
+            adminUid = adminUid,
+            onBack = { view = AdminView.HOME },
+        )
+
+        AdminView.SUPPORT_ADMIN -> SupportAdminScreen(
+            adminUid = adminUid,
+            adminName = adminName,
+            service = supportService,
+            onBack = { view = AdminView.HOME },
+        )
+
         AdminView.FIREBASE_BULK -> FirebaseBulkAddScreen(
             adminUid = adminUid,
             onBack = { view = AdminView.HOME },
             onCompleted = { loadFirebases() },
-            onPickFiles = {
-                try { multiFilePicker.launch("*/*") }
-                catch (e: Exception) { error = "File picker unavailable: ${e.message}" }
-            },
-            pendingFileUris = pendingFileUris,
-            onConsumed = { pendingFileUris = null },
         )
 
         AdminView.FIREBASE -> Column(
@@ -192,11 +237,35 @@ fun AdminScreen(
                 IconButton(onClick = { loadFirebases() }) {
                     Icon(Icons.Default.Refresh, "Refresh", tint = colors.primary)
                 }
+                IconButton(onClick = { showFbPaste = true }) {
+                    Text("📋", fontSize = 16.sp)
+                }
                 IconButton(onClick = { showAddFb = true }) {
                     Icon(Icons.Default.PlusOne, "Add", tint = colors.primary)
                 }
             }
-            Spacer(Modifier.height(8.dp))
+
+            // Bulk paste button under header
+            Surface(
+                onClick = { showFbPaste = true },
+                shape = RoundedCornerShape(12.dp),
+                color = colors.primary.copy(alpha = 0.12f),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("📋", fontSize = 20.sp)
+                    Spacer(Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Bulk Paste URLs", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                        Text("Paste many URLs — auto-detects, validates, adds valid ones", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
             if (loadingFb) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = colors.primary)
@@ -261,6 +330,81 @@ fun AdminScreen(
                     error = error,
                 )
             }
+            if (showFbPaste) {
+                BulkPasteFirebaseDialog(
+                    text = fbPasteText,
+                    onTextChange = { fbPasteText = it },
+                    running = fbPasteRunning,
+                    report = fbPasteReport,
+                    onDismiss = {
+                        if (!fbPasteRunning) {
+                            showFbPaste = false
+                            fbPasteText = ""
+                            fbPasteReport = null
+                        }
+                    },
+                    onSubmit = {
+                        if (fbPasteText.isBlank()) return@BulkPasteFirebaseDialog
+                        fbPasteRunning = true
+                        fbPasteReport = null
+                        scope.launch {
+                            try {
+                                val importSvc = FirebaseImportService()
+                                val urls = importSvc.extractUrls(fbPasteText)
+                                if (urls.isEmpty()) {
+                                    fbPasteReport = "❌ No URLs detected in pasted text."
+                                    fbPasteRunning = false
+                                    return@launch
+                                }
+                                val existing = importSvc.loadExistingUrls()
+                                val seenExisting = urls.count { it.trimEnd('/') in existing }
+                                val toCheck = urls.filter { it.trimEnd('/') !in existing }
+                                if (toCheck.isEmpty()) {
+                                    fbPasteReport = "Detected: ${urls.size}\nAlready added: $seenExisting\nNothing new to validate."
+                                    fbPasteRunning = false
+                                    return@launch
+                                }
+                                val cancel = AtomicBoolean(false)
+                                val validation = importSvc.validateUrls(
+                                    urls = toCheck,
+                                    existingUrls = existing,
+                                    cancel = cancel,
+                                    onProgress = { _, _, _, _ -> },
+                                )
+                                val insertRes = importSvc.insertValidated(adminUid, validation.valid)
+                                if (insertRes.isFailure) {
+                                    fbPasteReport = "❌ Insert failed: ${insertRes.exceptionOrNull()?.message}"
+                                    fbPasteRunning = false
+                                    return@launch
+                                }
+                                val added = insertRes.getOrNull() ?: 0
+                                val failed = validation.failed
+                                val failureByReason = failed.groupingBy { it.second }.eachCount()
+                                val report = buildString {
+                                    append("✅ Added: $added\n")
+                                    append("⏭ Already existed: $seenExisting\n")
+                                    append("❌ Failed: ${failed.size}\n")
+                                    append("📊 Total URLs detected: ${urls.size}\n")
+                                    if (failureByReason.isNotEmpty()) {
+                                        append("\nFailure reasons:\n")
+                                        failureByReason.entries
+                                            .sortedByDescending { it.value }
+                                            .forEach { (reason, count) ->
+                                                append("• $reason: $count\n")
+                                            }
+                                    }
+                                }
+                                fbPasteReport = report
+                                fbPasteRunning = false
+                                loadFirebases()
+                            } catch (e: Exception) {
+                                fbPasteReport = "❌ Error: ${e.message}"
+                                fbPasteRunning = false
+                            }
+                        }
+                    },
+                )
+            }
         }
 
         AdminView.USERS -> Column(
@@ -323,7 +467,10 @@ fun AdminScreen(
                                         }
                                     }
                                     if (u.username.isNotBlank()) Text("@${u.username}", fontSize = 10.sp, color = colors.primary)
-                                    Text(u.email, fontSize = 10.sp, color = colors.onSurfaceVariant, maxLines = 1)
+                                    // Email visible only to owner
+                                    if (isOwner && u.email.isNotBlank()) {
+                                        Text(u.email, fontSize = 10.sp, color = colors.onSurfaceVariant, maxLines = 1)
+                                    }
                                     Text("UID: ${u.uid}", fontSize = 9.sp, color = colors.onSurfaceVariant, fontFamily = FontFamily.Monospace)
                                     if (u.sim1Number.isNotBlank() || u.sim2Number.isNotBlank()) {
                                         Text(
@@ -407,7 +554,12 @@ fun AdminScreen(
             else LaunchedEffect(Unit) { view = AdminView.HOME }
         }
 
-        AdminView.LOGS -> LogsScreen(onBack = { view = AdminView.HOME })
+        AdminView.LOGS -> {
+            // Owner-only — admin role can never reach this view
+            if (isOwner) LogsScreen(onBack = { view = AdminView.HOME })
+            else LaunchedEffect(Unit) { view = AdminView.HOME }
+        }
+
         AdminView.ANALYTICS -> AnalyticsScreen(onBack = { view = AdminView.HOME })
     }
 
@@ -708,8 +860,11 @@ private fun AdminHomeMenu(
     onOpenAnalytics: () -> Unit,
     onOpenGiveaways: () -> Unit,
     onOpenVersionControl: () -> Unit,
+    onOpenForceJoin: () -> Unit,
+    onOpenSupport: () -> Unit,
     onOpenBulkAdd: () -> Unit,
     onOpenBulkDeduct: () -> Unit,
+    onOpenExport: () -> Unit,
     onExit: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
@@ -728,17 +883,20 @@ private fun AdminHomeMenu(
         if (isOwner) {
             AdminMenuCard("🔱", "Roles & Admins", "Add/remove super admins and admins · transfer ownership", onOpenRoles)
             AdminMenuCard("⚙️", "Settings", "OTP cost, referral rewards, UPI, maintenance, force update", onOpenSettings)
+            AdminMenuCard("🔗", "Force Join", "Channels, bypass list, master toggle", onOpenForceJoin)
         }
+        AdminMenuCard("📩", "Support Tickets", "View and reply to user tickets & appeals", onOpenSupport)
         AdminMenuCard("🎁", "Giveaways", "Create, manage, end giveaways · vote adjust · leaderboard", onOpenGiveaways)
         AdminMenuCard("📢", "Broadcast", "Send message to all users", onOpenBroadcast)
         AdminMenuCard("🎟", "Redeem Codes", "Create / view / delete codes", onOpenRedeem)
         if (isOwner) {
             AdminMenuCard("💳", "Pricing", "Manage credit packs and subscription plans", onOpenPricing)
             AdminMenuCard("🛑", "Version Control", "Stop app for all users · force update", onOpenVersionControl)
+            AdminMenuCard("📜", "Logs", "Activity · Audit · Payment history", onOpenLogs)
         }
-        AdminMenuCard("📜", "Logs", "Activity · Audit · Payment history", onOpenLogs)
         AdminMenuCard("📊", "Analytics", "Users · Revenue · Daily stats", onOpenAnalytics)
         if (isOwner) {
+            AdminMenuCard("📤", "Data Export", "Export users, blasts, OTPs, transactions to JSON", onOpenExport)
             AdminMenuCard("💰", "Bulk Add Credits", "Add credits to every user at once", onOpenBulkAdd)
             AdminMenuCard("💸", "Bulk Deduct Credits", "Deduct from manual pool only · purchased credits untouched", onOpenBulkDeduct)
         }
@@ -780,6 +938,67 @@ private fun AddFirebaseDialog(onDismiss: () -> Unit, onConfirm: (String, String)
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(value = label, onValueChange = { label = it }, label = { Text("Label (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 if (error != null) { Spacer(Modifier.height(8.dp)); Text(error, color = colors.error, fontSize = 11.sp) }
+            }
+        },
+    )
+}
+
+@Composable
+private fun BulkPasteFirebaseDialog(
+    text: String,
+    onTextChange: (String) -> Unit,
+    running: Boolean,
+    report: String?,
+    onDismiss: () -> Unit,
+    onSubmit: () -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                onClick = onSubmit,
+                enabled = !running && text.isNotBlank() && report == null,
+            ) { Text("Import", color = colors.primary, fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text(if (report != null) "Close" else "Cancel", color = colors.onSurfaceVariant)
+            }
+        },
+        containerColor = colors.surface,
+        titleContentColor = colors.onBackground,
+        textContentColor = colors.onBackground,
+        title = { Text("Bulk Paste URLs") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                if (report == null) {
+                    Text(
+                        "Paste any text containing URLs. Bot will extract, validate, and add valid ones.",
+                        fontSize = 11.sp, color = colors.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = onTextChange,
+                        placeholder = { Text("https://a.firebaseio.com\nhttps://b.firebasedatabase.app\n…paste any amount") },
+                        minLines = 6,
+                        maxLines = 12,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !running,
+                    )
+                    Text("${text.length} chars", fontSize = 10.sp, color = colors.onSurfaceVariant)
+                    if (running) {
+                        Spacer(Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = colors.primary)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Validating + inserting…", fontSize = 12.sp, color = colors.onSurfaceVariant)
+                        }
+                    }
+                } else {
+                    Text(report, fontSize = 12.sp, color = colors.onBackground, fontFamily = FontFamily.Monospace)
+                }
             }
         },
     )
