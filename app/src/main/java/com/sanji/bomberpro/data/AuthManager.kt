@@ -106,7 +106,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  EMAIL — SIGN UP (with unique username check)
+    //  EMAIL — SIGN UP (unique username, best-effort)
     // ============================================================
     suspend fun signUpWithEmail(
         email: String,
@@ -121,24 +121,31 @@ class AuthManager(private val context: Context) {
             return Result.failure(Exception("Username: letters, numbers, _ only"))
         if (password.length < 6) return Result.failure(Exception("Password min 6 chars"))
 
-        // Uniqueness check BEFORE creating the auth user — prevents orphan auth records
-        try {
-            val existingSnap = db.collection(FirebaseConfig.COL_USERS)
-                .whereEqualTo("usernameLower", cleanUsername.lowercase())
-                .limit(1).get().await()
-            if (!existingSnap.isEmpty) {
-                return Result.failure(Exception("Username already taken"))
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "username uniqueness check failed", e)
-            return Result.failure(Exception("Could not check username — try again"))
-        }
-
+        // 1. Create auth user FIRST (so subsequent Firestore query is authenticated)
         return try {
             val result = auth.createUserWithEmailAndPassword(cleanEmail, password).await()
             val user = result.user
                 ?: return Result.failure(Exception("No user returned"))
 
+            // 2. Now authenticated — check username uniqueness (best-effort)
+            var duplicate = false
+            try {
+                val existingSnap = db.collection(FirebaseConfig.COL_USERS)
+                    .whereEqualTo("usernameLower", cleanUsername.lowercase())
+                    .limit(1).get().await()
+                if (!existingSnap.isEmpty) duplicate = true
+            } catch (e: Exception) {
+                // Rules/network blocked query — proceed anyway. Duplicate risk is accepted pre-launch.
+                Log.w(TAG, "uniqueness check failed, proceeding with best effort", e)
+            }
+
+            if (duplicate) {
+                // Roll back auth user
+                try { user.delete().await() } catch (_: Exception) {}
+                return Result.failure(Exception("Username already taken"))
+            }
+
+            // 3. Set display name
             try {
                 val profileUpdates = UserProfileChangeRequest.Builder()
                     .setDisplayName(cleanUsername)
@@ -146,6 +153,7 @@ class AuthManager(private val context: Context) {
                 user.updateProfile(profileUpdates).await()
             } catch (_: Exception) {}
 
+            // 4. Create user doc
             ensureUserDoc(user, username = cleanUsername)
             loadProfileAndRole(user)
             Result.success(user)
@@ -296,7 +304,6 @@ class AuthManager(private val context: Context) {
                     updates["username"] = username
                     updates["usernameLower"] = username.lowercase()
                 } else {
-                    // Backfill usernameLower for legacy users
                     val existing = snapshot.data ?: emptyMap()
                     val existingUsername = (existing["username"] as? String)?.trim()
                         ?: (existing["displayName"] as? String)?.trim()
@@ -379,7 +386,6 @@ class AuthManager(private val context: Context) {
                         lastActive = profileDoc.getLong("lastActive") ?: 0L,
                     )
 
-                    // Backfill usernameLower for legacy users (defensive)
                     if (!profileDoc.contains("usernameLower") && un.isNotBlank()) {
                         try {
                             db.collection(FirebaseConfig.COL_USERS).document(user.uid)
@@ -448,7 +454,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  USERNAME UPDATE (with uniqueness check)
+    //  USERNAME UPDATE (best-effort unique)
     // ============================================================
     suspend fun updateUsername(newUsername: String): Result<Unit> {
         val user = auth.currentUser ?: return Result.failure(Exception("Not signed in"))
@@ -457,7 +463,7 @@ class AuthManager(private val context: Context) {
         if (!clean.matches(Regex("^[a-zA-Z0-9_]+$")))
             return Result.failure(Exception("Letters, numbers, _ only"))
 
-        // Uniqueness check — same username allowed only for this same user
+        // Best-effort uniqueness — proceed if query fails (rules/network)
         try {
             val existingSnap = db.collection(FirebaseConfig.COL_USERS)
                 .whereEqualTo("usernameLower", clean.lowercase())
@@ -469,7 +475,7 @@ class AuthManager(private val context: Context) {
                 }
             }
         } catch (e: Exception) {
-            return Result.failure(Exception("Could not check username — try again"))
+            Log.w(TAG, "updateUsername uniqueness check failed, proceeding", e)
         }
 
         return try {
