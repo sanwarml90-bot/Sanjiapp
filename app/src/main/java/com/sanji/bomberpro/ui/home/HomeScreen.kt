@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Toll
 import androidx.compose.material.icons.filled.VpnKey
@@ -132,6 +133,7 @@ fun HomeScreen(
                     onOpenTemplates = { onNavigate(Routes.TEMPLATES) },
                     onOpenGiveaways = { onNavigate(Routes.GIVEAWAYS) },
                     onOpenAnnouncements = { onNavigate(Routes.ANNOUNCEMENTS) },
+                    onOpenSupport = { onNavigate(Routes.SUPPORT) },
                     onOpenSettings = { onNavigate(Routes.USER_SETTINGS) },
                     onOpenSchedule = { onNavigate(Routes.SCHEDULE_BLAST) },
                     onOpenAppeal = { onNavigate(Routes.APPEAL) },
@@ -212,6 +214,7 @@ private fun HomeTabContent(
     onOpenTemplates: () -> Unit,
     onOpenGiveaways: () -> Unit,
     onOpenAnnouncements: () -> Unit,
+    onOpenSupport: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSchedule: () -> Unit,
     onOpenAppeal: () -> Unit,
@@ -409,6 +412,15 @@ private fun HomeTabContent(
             QuickAccessChip(Icons.Default.WorkspacePremium, "Giveaways", onOpenGiveaways, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.Notifications, "Announce", onOpenAnnouncements, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.MonetizationOn, "Schedule", onOpenSchedule, Modifier.weight(1f))
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuickAccessChip(Icons.Default.SupportAgent, "Support", onOpenSupport, Modifier.weight(1f))
+            // Keeps row layout stable — two spacers fill remaining slots
+            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.weight(1f))
         }
 
         Spacer(Modifier.height(24.dp))
