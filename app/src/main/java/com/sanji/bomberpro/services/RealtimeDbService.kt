@@ -45,6 +45,14 @@ data class SendResult(
     val error: String? = null,
 )
 
+data class FirebaseTestResult(
+    val firebaseId: String,
+    val firebaseLabel: String,
+    val httpStatus: Int,
+    val deviceCount: Int,
+    val error: String? = null,
+)
+
 class RealtimeDbService {
 
     private val http: OkHttpClient = run {
@@ -65,12 +73,10 @@ class RealtimeDbService {
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
     private val pathCache = ConcurrentHashMap<String, String>()
 
-    // ============================================================
-    //  SCAN CACHE — 5 min
-    // ============================================================
     companion object {
         private const val TAG = "RealtimeDbService"
         private const val SCAN_CACHE_MS = 5 * 60 * 1000L
+        private const val EMPTY_SCAN_CACHE_MS = 15 * 1000L
     }
 
     private data class ScanCache(
@@ -118,8 +124,72 @@ class RealtimeDbService {
     }
 
     // ============================================================
-    //  SCAN — with 5-min cache
-    //  forceRefresh = true to bypass cache
+    //  TEST SINGLE FIREBASE — admin diagnostic
+    // ============================================================
+    suspend fun testFirebase(fb: FirebaseNode): FirebaseTestResult = withContext(Dispatchers.IO) {
+        val baseUrl = fb.url.trimEnd('/')
+        val clientsUrl = "$baseUrl/clients.json?shallow=true"
+        try {
+            val req = Request.Builder()
+                .url(clientsUrl)
+                .header("Accept", "application/json")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android) SanjiApp/1.0")
+                .get().build()
+            http.newCall(req).execute().use { resp ->
+                val body = resp.body?.string()?.trim() ?: ""
+                when {
+                    !resp.isSuccessful -> FirebaseTestResult(
+                        firebaseId = fb.id,
+                        firebaseLabel = fb.label,
+                        httpStatus = resp.code,
+                        deviceCount = 0,
+                        error = when (resp.code) {
+                            401 -> "Auth required (rules block read)"
+                            403 -> "Forbidden (rules block access)"
+                            404 -> "Not found (wrong URL?)"
+                            429 -> "Rate limited"
+                            in 500..599 -> "Server error ${resp.code}"
+                            else -> "HTTP ${resp.code}"
+                        },
+                    )
+                    body.isEmpty() || body == "null" -> FirebaseTestResult(
+                        firebaseId = fb.id,
+                        firebaseLabel = fb.label,
+                        httpStatus = resp.code,
+                        deviceCount = 0,
+                        error = "Empty — no devices registered",
+                    )
+                    else -> {
+                        val count = try {
+                            val obj = JSONObject(body)
+                            val keys = obj.keys()
+                            var c = 0
+                            while (keys.hasNext()) { keys.next(); c++ }
+                            c
+                        } catch (_: Exception) { 0 }
+                        FirebaseTestResult(
+                            firebaseId = fb.id,
+                            firebaseLabel = fb.label,
+                            httpStatus = resp.code,
+                            deviceCount = count,
+                            error = null,
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            FirebaseTestResult(
+                firebaseId = fb.id,
+                firebaseLabel = fb.label,
+                httpStatus = 0,
+                deviceCount = 0,
+                error = "Network: ${e.message ?: e.javaClass.simpleName}",
+            )
+        }
+    }
+
+    // ============================================================
+    //  SCAN ALL
     // ============================================================
     suspend fun scanAll(
         firebases: List<FirebaseNode>,
@@ -131,10 +201,14 @@ class RealtimeDbService {
         val key = cacheKey(firebases)
         val cached = scanCache[key]
 
-        if (!forceRefresh && cached != null && System.currentTimeMillis() - cached.ts < SCAN_CACHE_MS) {
-            Log.d(TAG, "scanAll: cache hit (${cached.devices.size} devices, ${(System.currentTimeMillis() - cached.ts) / 1000}s old)")
-            onProgress?.invoke(firebases.size - 1, cached.devices.size)
-            return@withContext cached.devices
+        if (!forceRefresh && cached != null) {
+            val age = System.currentTimeMillis() - cached.ts
+            val maxAge = if (cached.devices.isEmpty()) EMPTY_SCAN_CACHE_MS else SCAN_CACHE_MS
+            if (age < maxAge) {
+                Log.d(TAG, "scanAll: cache hit (${cached.devices.size} devices, ${age / 1000}s old)")
+                onProgress?.invoke(firebases.size - 1, cached.devices.size)
+                return@withContext cached.devices
+            }
         }
 
         Log.d(TAG, "scanAll: fresh scan of ${firebases.size} firebase(s)")
@@ -196,7 +270,7 @@ class RealtimeDbService {
             null
         }
 
-        if (bodyText == null || bodyText.isEmpty() || bodyText == "null") {
+        if (bodyText.isNullOrEmpty() || bodyText == "null") {
             return@coroutineScope emptyList<Device>()
         }
 
@@ -372,6 +446,9 @@ class RealtimeDbService {
         return if (devId.length <= 8) devId else "${devId.take(4)}…${devId.takeLast(4)}"
     }
 
+    // ============================================================
+    //  SEND SMS
+    // ============================================================
     suspend fun sendSms(
         firebaseUrl: String,
         deviceId: String,
