@@ -1,5 +1,8 @@
 package com.sanji.bomberpro.ui.settings
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -20,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
@@ -43,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -82,6 +87,16 @@ fun UserSettingsScreen(
             )
         } catch (_: Exception) {
             error = "No app to open Telegram"
+        }
+    }
+
+    fun copyToClipboard(label: String, value: String) {
+        try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText(label, value))
+            success = "Copied"
+        } catch (_: Exception) {
+            error = "Copy failed"
         }
     }
 
@@ -140,6 +155,40 @@ fun UserSettingsScreen(
                                 color = colors.onSurfaceVariant,
                                 maxLines = 1,
                             )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    // Own UID — copyable
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = colors.background,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Your User ID",
+                                    fontSize = 10.sp, color = colors.onSurfaceVariant,
+                                )
+                                Text(
+                                    profile?.uid ?: "—",
+                                    fontSize = 11.sp, color = colors.onBackground,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                )
+                            }
+                            IconButton(onClick = {
+                                val uid = profile?.uid ?: return@IconButton
+                                copyToClipboard("Your UID", uid)
+                            }) {
+                                Icon(
+                                    Icons.Default.ContentCopy, "Copy UID",
+                                    tint = colors.primary, modifier = Modifier.size(18.dp),
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.height(12.dp))
@@ -359,7 +408,7 @@ fun UserSettingsScreen(
             text = {
                 Column {
                     Text(
-                        "Letters, numbers, and _ only. Min 3 chars.",
+                        "Letters, numbers, and _ only. Min 3 chars. Must be unique.",
                         fontSize = 11.sp,
                         color = colors.onSurfaceVariant,
                     )
@@ -420,7 +469,6 @@ private fun ThemePickerDialog(
                             modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            // color swatches
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Box(
                                     modifier = Modifier
