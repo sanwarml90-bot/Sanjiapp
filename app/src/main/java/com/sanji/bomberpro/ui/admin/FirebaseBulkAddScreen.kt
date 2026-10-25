@@ -5,6 +5,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -75,9 +77,6 @@ fun FirebaseBulkAddScreen(
     adminUid: String,
     onBack: () -> Unit,
     onCompleted: () -> Unit,
-    onPickFiles: () -> Unit,
-    pendingFileUris: List<Uri>?,
-    onConsumed: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
     val scope = rememberCoroutineScope()
@@ -110,38 +109,39 @@ fun FirebaseBulkAddScreen(
 
     val cancelFlag = remember { AtomicBoolean(false) }
 
-    // consume pending file URIs from parent (multi-file supported)
-    LaunchedEffect(pendingFileUris) {
-        val uris = pendingFileUris
-        if (uris.isNullOrEmpty()) return@LaunchedEffect
-        onConsumed()
+    // Local multi-file picker — no parent handoff, no race condition
+    val multiFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents(),
+    ) { uris ->
+        if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
         phase = BulkPhase.EXTRACTING
         error = null
         extracted.clear()
         selected.clear()
-        try {
-            val allUrls = mutableListOf<String>()
-            for (u in uris) {
-                val read = service.readUriText(u, context.contentResolver)
-                if (read.isFailure) {
-                    error = "Read failed: ${read.exceptionOrNull()?.message}"
-                    continue
+        scope.launch {
+            try {
+                val allUrls = mutableListOf<String>()
+                for (u in uris) {
+                    val read = service.readUriText(u, context.contentResolver)
+                    if (read.isFailure) {
+                        error = "Read failed: ${read.exceptionOrNull()?.message}"
+                        continue
+                    }
+                    allUrls.addAll(service.extractUrls(read.getOrNull() ?: ""))
                 }
-                val urls = service.extractUrls(read.getOrNull() ?: "")
-                allUrls.addAll(urls)
-            }
-            val unique = allUrls.toSet().toList()
-            if (unique.isEmpty()) {
-                error = "No URLs found in selected file(s)"
+                val unique = allUrls.toSet().toList()
+                if (unique.isEmpty()) {
+                    error = "No URLs found in selected file(s)"
+                    phase = BulkPhase.IDLE
+                    return@launch
+                }
+                extracted.addAll(unique)
+                selected.addAll(unique.map { true })
+                phase = BulkPhase.PREVIEW
+            } catch (e: Exception) {
+                error = "Extract failed: ${e.message}"
                 phase = BulkPhase.IDLE
-                return@LaunchedEffect
             }
-            extracted.addAll(unique)
-            selected.addAll(unique.map { true })
-            phase = BulkPhase.PREVIEW
-        } catch (e: Exception) {
-            error = "Extract failed: ${e.message}"
-            phase = BulkPhase.IDLE
         }
     }
 
@@ -293,7 +293,7 @@ fun FirebaseBulkAddScreen(
                                 Surface(
                                     onClick = {
                                         try {
-                                            onPickFiles()
+                                            multiFilePicker.launch("*/*")
                                         } catch (e: Exception) {
                                             error = "File picker unavailable: ${e.message}"
                                         }
