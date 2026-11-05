@@ -37,9 +37,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.data.BlastRecord
-import com.sanji.bomberpro.services.AdminUser
 import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.SanjiEmoji
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -49,9 +49,14 @@ private val FMT = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault())
 private fun fmt(ts: Long): String =
     try { FMT.format(Date(ts * 1000L)) } catch (_: Exception) { "—" }
 
+/**
+ * SMS history viewer.
+ * Works for both live users AND soft-deleted accounts (history survives with uid).
+ */
 @Composable
 fun AdminUserSmsHistoryScreen(
-    user: AdminUser,
+    uid: String,
+    displayName: String,
     onBack: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
@@ -64,13 +69,13 @@ fun AdminUserSmsHistoryScreen(
     suspend fun refresh() {
         loading = true
         try {
-            blasts = userData.getBlastRecords(user.uid, 100)
+            blasts = userData.getBlastRecords(uid, 100)
         } finally {
             loading = false
         }
     }
 
-    LaunchedEffect(user.uid) { refresh() }
+    LaunchedEffect(uid) { refresh() }
 
     Column(modifier = Modifier.fillMaxSize().background(colors.background).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -83,8 +88,13 @@ fun AdminUserSmsHistoryScreen(
                     fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
                 )
                 Text(
-                    user.displayName.ifBlank { user.email }.take(40),
+                    displayName.ifBlank { uid }.take(40),
                     fontSize = 11.sp, color = colors.onSurfaceVariant,
+                )
+                Text(
+                    "UID: $uid",
+                    fontSize = 9.sp, color = colors.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
                 )
             }
             IconButton(onClick = { scope.launch { refresh() } }) {
@@ -103,7 +113,11 @@ fun AdminUserSmsHistoryScreen(
 
         if (blasts.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No SMS sent yet by this user", fontSize = 13.sp, color = colors.onSurfaceVariant)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(SanjiEmoji.HISTORY, fontSize = 42.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("No SMS sent by this user", fontSize = 13.sp, color = colors.onSurfaceVariant)
+                }
             }
             return
         }
@@ -124,7 +138,7 @@ fun AdminUserSmsHistoryScreen(
                     Column(Modifier.padding(12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                "📞 ${b.targetFull.ifBlank { b.targetMasked }}",
+                                "${SanjiEmoji.PHONE} ${b.targetFull.ifBlank { b.targetMasked }}",
                                 fontSize = 13.sp, fontWeight = FontWeight.Bold,
                                 color = colors.primary,
                                 fontFamily = FontFamily.Monospace,
@@ -137,22 +151,22 @@ fun AdminUserSmsHistoryScreen(
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "💬 ${b.message}",
+                            "${SanjiEmoji.MESSAGE} ${b.message}",
                             fontSize = 12.sp, color = colors.onBackground,
                         )
                         Spacer(Modifier.height(6.dp))
                         Row {
-                            Text("✅ ${b.sent}", fontSize = 11.sp, color = colors.success, fontWeight = FontWeight.SemiBold)
+                            Text("${SanjiEmoji.SUCCESS} ${b.sent}", fontSize = 11.sp, color = colors.success, fontWeight = FontWeight.SemiBold)
                             Spacer(Modifier.width(10.dp))
-                            Text("❌ ${b.failed}", fontSize = 11.sp, color = colors.error, fontWeight = FontWeight.SemiBold)
+                            Text("${SanjiEmoji.ERROR} ${b.failed}", fontSize = 11.sp, color = colors.error, fontWeight = FontWeight.SemiBold)
                             Spacer(Modifier.width(10.dp))
-                            Text("📊 req ${b.requested}", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                            Text("${SanjiEmoji.TOTAL} req ${b.requested}", fontSize = 11.sp, color = colors.onSurfaceVariant)
                             Spacer(Modifier.width(10.dp))
                             Text("⏱ ${b.durationSec}s", fontSize = 11.sp, color = colors.onSurfaceVariant)
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "🕐 ${fmt(b.ts)} · status ${b.status}",
+                            "${SanjiEmoji.CLOCK} ${fmt(b.ts)} · status ${b.status}",
                             fontSize = 10.sp, color = colors.onSurfaceVariant,
                         )
                     }
