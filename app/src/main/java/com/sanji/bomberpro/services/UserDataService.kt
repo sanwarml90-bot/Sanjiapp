@@ -114,11 +114,6 @@ class UserDataService {
         } catch (e: Exception) { false }
     }
 
-    /**
-     * Deduct credits safely — transaction-guarded.
-     * NEVER goes negative. If requested > current, deducts only what exists.
-     * Returns true if ANY amount was deducted (full or partial).
-     */
     suspend fun deductCredits(uid: String, amount: Int, reason: String): Boolean =
         withContext(Dispatchers.IO) {
             if (amount <= 0) return@withContext true
@@ -141,11 +136,6 @@ class UserDataService {
             } catch (e: Exception) { false }
         }
 
-    /**
-     * Force-deduct — used by blast reserve.
-     * If current < amount, THROWS (transaction aborts) — caller should pre-check.
-     * Never leaves negative — transaction ensures atomic check.
-     */
     suspend fun forceDeductCredits(uid: String, amount: Int, reason: String): Boolean =
         withContext(Dispatchers.IO) {
             if (amount <= 0) return@withContext true
@@ -164,10 +154,6 @@ class UserDataService {
             } catch (e: Exception) { false }
         }
 
-    /**
-     * Wipe ALL credits for a single user. Admin action.
-     * Also zeros `manualAddedCredits` to keep pools consistent.
-     */
     suspend fun deductAllCreditsFromUser(uid: String, adminUid: String, reason: String = "admin-wipe"): Int =
         withContext(Dispatchers.IO) {
             val userRef = db.collection(FirebaseConfig.COL_USERS).document(uid)
@@ -191,7 +177,7 @@ class UserDataService {
         }
 
     // ============================================================
-    //  COINS — always floor at 0
+    //  COINS
     // ============================================================
     suspend fun addCoins(
         uid: String,
@@ -398,7 +384,6 @@ class UserDataService {
         } catch (e: Exception) { null }
     }
 
-    // NO composite index required — filter + sort client-side
     suspend fun getBlastRecords(uid: String, limit: Long = 50): List<BlastRecord> =
         withContext(Dispatchers.IO) {
             try {
@@ -448,13 +433,14 @@ class UserDataService {
     ): String? = withContext(Dispatchers.IO) {
         try {
             val ref = db.collection(FirebaseConfig.COL_BLASTS).document()
+            val maskedList = numbers.take(50).map { maskNumber(it) }
             ref.set(
                 hashMapOf(
                     "id" to ref.id,
                     "uid" to uid,
                     "type" to "bulk",
                     "numbersCount" to numbers.size,
-                    "targetsMasked" to numbers.take(50).map { maskNumber(it) },
+                    "targetsMasked" to maskedList,
                     "message" to message.take(500),
                     "perNumberCount" to perNumberCount,
                     "power" to power,
@@ -699,17 +685,16 @@ class UserDataService {
     }
 
     // ============================================================
+    //  MASK — RESTORED
+    // ============================================================
+    fun maskNumber(number: String): String {
+        if (number.length <= 4) return number
+        return number.take(2) + "******" + number.takeLast(4)
+    }
+
+    // ============================================================
     //  SOFT DELETE ACCOUNT
     // ============================================================
-    /**
-     * Soft-delete a user account:
-     *  1. Reads user doc
-     *  2. Snapshots to deleted_accounts/{uid} with deletion metadata
-     *  3. Deletes users/{uid}
-     *  4. Releases any device_locks that point to this uid
-     *  History collections (blasts, otp_fetches, transactions, etc.) stay with uid
-     *  so admin can still search.
-     */
     suspend fun softDeleteUser(
         uid: String,
         deletedBy: String,
@@ -721,7 +706,6 @@ class UserDataService {
             if (!snap.exists()) return@withContext false
             val data = snap.data ?: emptyMap()
 
-            // Find device fingerprint if present
             val deviceInfo = data["deviceInfo"] as? Map<*, *>
             val fingerprint = (deviceInfo?.get("fingerprint") as? String) ?: ""
 
@@ -745,7 +729,6 @@ class UserDataService {
                 snapshot = data,
             )
 
-            // 1. Write to deleted_accounts
             db.collection(FirebaseConfig.COL_DELETED_ACCOUNTS).document(uid).set(
                 mapOf(
                     "uid" to deleted.uid,
@@ -768,10 +751,8 @@ class UserDataService {
                 )
             ).await()
 
-            // 2. Delete user doc
             userRef.delete().await()
 
-            // 3. Release device lock
             if (fingerprint.isNotBlank()) {
                 try {
                     db.collection(FirebaseConfig.COL_DEVICE_LOCKS)
@@ -848,7 +829,7 @@ class UserDataService {
     }
 
     // ============================================================
-    //  ACCOUNT ANALYSIS — inactive / dead / duplicate
+    //  ACCOUNT ANALYSIS
     // ============================================================
     suspend fun analyzeAccounts(): Pair<List<AnalyzedUser>, List<AnalyzedUser>> =
         withContext(Dispatchers.IO) {
@@ -868,7 +849,6 @@ class UserDataService {
                 for (doc in users) {
                     val data = doc.data ?: continue
                     val role = data["role"] as? String ?: "user"
-                    // Skip admin-tier accounts from dead/inactive lists
                     if (role == "owner" || role == "super_admin" || role == "admin") continue
 
                     val lastActive = (data["lastActive"] as? Number)?.toLong() ?: 0L
@@ -909,13 +889,11 @@ class UserDataService {
                         daysOld = daysOld,
                     )
 
-                    // inactive: no activity in 30 days
                     val refTime = if (lastActive > 0) lastActive else createdAt
                     if (refTime in 1 until inactiveCutoff) {
                         inactive.add(analyzed)
                     }
 
-                    // dead: never sent anything AND account > 7 days old
                     if (totalSms == 0 && totalOtps == 0 && totalBlasts == 0 &&
                         createdAt in 1 until minAgeForDead
                     ) {
@@ -928,22 +906,8 @@ class UserDataService {
                     dead.sortedByDescending { it.daysOld }
         }
 
-    /**
-     * Find duplicate accounts — more than one uid per device fingerprint.
-     */
     suspend fun findDuplicateGroups(): List<DuplicateGroup> = withContext(Dispatchers.IO) {
         try {
-            // Primary source: device_locks collection (already enforces 1:1 for new users)
-            val locks = db.collection(FirebaseConfig.COL_DEVICE_LOCKS).get().await().documents
-            val fpToUid = mutableMapOf<String, String>()
-            for (l in locks) {
-                val fp = l.id
-                val uid = l.getString("uid") ?: continue
-                if (fp.isBlank() || uid.isBlank()) continue
-                fpToUid[fp] = uid
-            }
-
-            // Secondary: scan users with deviceInfo.fingerprint — catches legacy accounts
             val usersSnap = db.collection(FirebaseConfig.COL_USERS).limit(5000).get().await().documents
             val fpToUsers = mutableMapOf<String, MutableList<AnalyzedUser>>()
 
