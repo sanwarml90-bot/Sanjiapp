@@ -1,5 +1,6 @@
 package com.sanji.bomberpro.services
 
+import android.util.Log
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
@@ -135,16 +136,9 @@ class AdminService {
         try {
             db.collection(FirebaseConfig.COL_FIREBASES).document(id).delete().await()
             true
-        } catch (e: Exception) {
-            false
-        }
+        } catch (e: Exception) { false }
     }
 
-    /**
-     * Delete a batch of firebases in one call.
-     * Used by "Kill Dead Firebases" button after test runs.
-     * Returns count actually deleted.
-     */
     suspend fun deleteFirebases(ids: List<String>, adminUid: String): Int =
         withContext(Dispatchers.IO) {
             if (ids.isEmpty()) return@withContext 0
@@ -180,9 +174,7 @@ class AdminService {
             db.collection(FirebaseConfig.COL_FIREBASES).document(id)
                 .update("enabled", enabled).await()
             true
-        } catch (e: Exception) {
-            false
-        }
+        } catch (e: Exception) { false }
     }
 
     fun isValidFirebaseUrl(url: String): Boolean {
@@ -227,9 +219,7 @@ class AdminService {
             val snap = db.collection(FirebaseConfig.COL_USERS).document(uid).get().await()
             if (!snap.exists()) return@withContext null
             parseUser(snap.id, snap.data ?: emptyMap())
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     private fun parseUser(id: String, map: Map<String, Any?>): AdminUser? {
@@ -281,7 +271,7 @@ class AdminService {
     }
 
     // ============================================================
-    //  CREDITS / COINS ADJUST
+    //  CREDITS / COINS
     // ============================================================
     suspend fun addCreditsToUser(uid: String, amount: Int, adminUid: String, reason: String = "admin-add"): Boolean =
         withContext(Dispatchers.IO) {
@@ -295,9 +285,7 @@ class AdminService {
                 logTransaction(uid, "credit_add_manual", amount, reason)
                 logAudit(adminUid, "admin_credit_add", uid, amount, reason)
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     suspend fun deductCreditsFromUser(uid: String, amount: Int, adminUid: String): Boolean =
@@ -326,9 +314,7 @@ class AdminService {
                     logAudit(adminUid, "admin_credit_deduct", uid, actual, "")
                 }
                 actual > 0
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     suspend fun addCoinsToUser(uid: String, amount: Int, adminUid: String): Boolean =
@@ -343,9 +329,7 @@ class AdminService {
                 logTransaction(uid, "coin_add_manual", amount, "admin-add")
                 logAudit(adminUid, "admin_coin_add", uid, amount, "")
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     suspend fun deductCoinsFromUser(uid: String, amount: Int, adminUid: String): Boolean =
@@ -374,13 +358,11 @@ class AdminService {
                     logAudit(adminUid, "admin_coin_deduct", uid, actual, "")
                 }
                 actual > 0
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     // ============================================================
-    //  BULK ADD / DEDUCT (amount OR all)
+    //  BULK ADD / DEDUCT
     // ============================================================
     suspend fun addCreditsToAll(amount: Int, adminUid: String): Result<Int> = withContext(Dispatchers.IO) {
         if (amount <= 0) return@withContext Result.failure(Exception("Amount must be > 0"))
@@ -402,16 +384,9 @@ class AdminService {
             }
             logAudit(adminUid, "admin_credit_add_all", "", amount, "count=$count")
             Result.success(count)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        } catch (e: Exception) { Result.failure(e) }
     }
 
-    /**
-     * Deduct from all users.
-     * mode = "amount" → deducts `amount` from each user's manual pool only (purchased credits untouched)
-     * mode = "all"    → wipes ALL credits + manual pool to 0
-     */
     suspend fun deductCreditsFromAll(
         amount: Int,
         adminUid: String,
@@ -484,9 +459,7 @@ class AdminService {
                     mode = mode,
                 )
             )
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        } catch (e: Exception) { Result.failure(e) }
     }
 
     // ============================================================
@@ -499,9 +472,7 @@ class AdminService {
                     .update(mapOf("banned" to true, "banReason" to reason.take(200))).await()
                 logAudit(adminUid, "admin_ban", uid, 0, reason)
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     suspend fun unbanUser(uid: String, adminUid: String): Boolean =
@@ -511,9 +482,7 @@ class AdminService {
                     .update(mapOf("banned" to false, "banReason" to "")).await()
                 logAudit(adminUid, "admin_unban", uid, 0, "")
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     // ============================================================
@@ -527,9 +496,7 @@ class AdminService {
                 else ref.update("maxSendLimit", limit.toLong()).await()
                 logAudit(adminUid, "admin_set_send_limit", uid, limit ?: -1, "")
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     suspend fun setOtpLimit(uid: String, limit: Int?, adminUid: String): Boolean =
@@ -540,14 +507,9 @@ class AdminService {
                 else ref.update("maxOtpLimit", limit.toLong()).await()
                 logAudit(adminUid, "admin_set_otp_limit", uid, limit ?: -1, "")
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
-    // ============================================================
-    //  NOTES / TAGS
-    // ============================================================
     suspend fun setNotes(uid: String, notes: String, adminUid: String): Boolean =
         withContext(Dispatchers.IO) {
             try {
@@ -555,9 +517,7 @@ class AdminService {
                     .update("notes", notes.take(500)).await()
                 logAudit(adminUid, "admin_set_notes", uid, 0, notes.take(80))
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     suspend fun setTags(uid: String, tags: List<String>, adminUid: String): Boolean =
@@ -567,14 +527,9 @@ class AdminService {
                     .update("tags", tags.take(10)).await()
                 logAudit(adminUid, "admin_set_tags", uid, 0, tags.joinToString(",").take(120))
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
-    // ============================================================
-    //  PREMIUM
-    // ============================================================
     suspend fun setPremium(uid: String, premium: Boolean, adminUid: String): Boolean =
         withContext(Dispatchers.IO) {
             try {
@@ -582,14 +537,9 @@ class AdminService {
                     .update("premium", premium).await()
                 logAudit(adminUid, "admin_premium", uid, if (premium) 1 else 0, "")
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
-    // ============================================================
-    //  SUBSCRIPTION
-    // ============================================================
     suspend fun grantSubscription(uid: String, plan: String, days: Int, adminUid: String): Boolean =
         withContext(Dispatchers.IO) {
             try {
@@ -605,9 +555,7 @@ class AdminService {
                     ).await()
                 logAudit(adminUid, "admin_grant_sub", uid, days, plan)
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     suspend fun revokeSubscription(uid: String, adminUid: String): Boolean =
@@ -623,9 +571,7 @@ class AdminService {
                     ).await()
                 logAudit(adminUid, "admin_revoke_sub", uid, 0, "")
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
 
     // ============================================================
@@ -727,15 +673,10 @@ class AdminService {
 
             logAudit(adminUid, "admin_add_role", "", 0, "$cleanEmail=$role")
             Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        } catch (e: Exception) { Result.failure(e) }
     }
 
-    suspend fun removeRole(
-        email: String,
-        adminUid: String,
-    ): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun removeRole(email: String, adminUid: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val cleanEmail = email.trim().lowercase()
             if (cleanEmail == getOwnerEmail()) {
@@ -756,96 +697,94 @@ class AdminService {
 
             logAudit(adminUid, "admin_remove_role", "", 0, cleanEmail)
             Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        } catch (e: Exception) { Result.failure(e) }
     }
 
-    suspend fun transferOwnership(
-        newOwnerEmail: String,
-        currentOwnerUid: String,
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        try {
-            val cleanNew = newOwnerEmail.trim().lowercase()
-            if (cleanNew.isBlank() || !cleanNew.contains("@")) {
-                return@withContext Result.failure(Exception("Invalid email"))
-            }
-            val currentOwner = getOwnerEmail()
-            if (cleanNew == currentOwner) {
-                return@withContext Result.failure(Exception("Already owner"))
-            }
+    suspend fun transferOwnership(newOwnerEmail: String, currentOwnerUid: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            try {
+                val cleanNew = newOwnerEmail.trim().lowercase()
+                if (cleanNew.isBlank() || !cleanNew.contains("@")) {
+                    return@withContext Result.failure(Exception("Invalid email"))
+                }
+                val currentOwner = getOwnerEmail()
+                if (cleanNew == currentOwner) {
+                    return@withContext Result.failure(Exception("Already owner"))
+                }
 
-            db.collection(FirebaseConfig.COL_SETTINGS)
-                .document(FirebaseConfig.DOC_GLOBAL_SETTINGS)
-                .set(
-                    mapOf("ownerEmail" to cleanNew),
+                db.collection(FirebaseConfig.COL_SETTINGS)
+                    .document(FirebaseConfig.DOC_GLOBAL_SETTINGS)
+                    .set(
+                        mapOf("ownerEmail" to cleanNew),
+                        SetOptions.merge(),
+                    ).await()
+
+                val oldHash = hashEmail(currentOwner)
+                db.collection(FirebaseConfig.COL_ROLES).document(oldHash).set(
+                    mapOf(
+                        "email" to currentOwner,
+                        "role" to "super_admin",
+                        "addedBy" to cleanNew,
+                        "addedAt" to System.currentTimeMillis() / 1000L,
+                        "active" to true,
+                    ),
                     SetOptions.merge(),
                 ).await()
 
-            val oldHash = hashEmail(currentOwner)
-            db.collection(FirebaseConfig.COL_ROLES).document(oldHash).set(
-                mapOf(
-                    "email" to currentOwner,
-                    "role" to "super_admin",
-                    "addedBy" to cleanNew,
-                    "addedAt" to System.currentTimeMillis() / 1000L,
-                    "active" to true,
-                ),
-                SetOptions.merge(),
-            ).await()
+                val newHash = hashEmail(cleanNew)
+                db.collection(FirebaseConfig.COL_ROLES).document(newHash).set(
+                    mapOf(
+                        "email" to cleanNew,
+                        "role" to "owner",
+                        "addedBy" to currentOwner,
+                        "addedAt" to System.currentTimeMillis() / 1000L,
+                        "active" to true,
+                    ),
+                    SetOptions.merge(),
+                ).await()
 
-            val newHash = hashEmail(cleanNew)
-            db.collection(FirebaseConfig.COL_ROLES).document(newHash).set(
-                mapOf(
-                    "email" to cleanNew,
-                    "role" to "owner",
-                    "addedBy" to currentOwner,
-                    "addedAt" to System.currentTimeMillis() / 1000L,
-                    "active" to true,
-                ),
-                SetOptions.merge(),
-            ).await()
+                try {
+                    val newUserSnap = db.collection(FirebaseConfig.COL_USERS)
+                        .whereEqualTo("email", cleanNew)
+                        .limit(1).get().await()
+                    if (!newUserSnap.isEmpty) {
+                        newUserSnap.documents.first().reference.update("role", "owner").await()
+                    }
+                    val oldUserSnap = db.collection(FirebaseConfig.COL_USERS)
+                        .whereEqualTo("email", currentOwner)
+                        .limit(1).get().await()
+                    if (!oldUserSnap.isEmpty) {
+                        oldUserSnap.documents.first().reference.update("role", "super_admin").await()
+                    }
+                } catch (_: Exception) {}
 
-            try {
-                val newUserSnap = db.collection(FirebaseConfig.COL_USERS)
-                    .whereEqualTo("email", cleanNew)
-                    .limit(1).get().await()
-                if (!newUserSnap.isEmpty) {
-                    newUserSnap.documents.first().reference.update("role", "owner").await()
-                }
-                val oldUserSnap = db.collection(FirebaseConfig.COL_USERS)
-                    .whereEqualTo("email", currentOwner)
-                    .limit(1).get().await()
-                if (!oldUserSnap.isEmpty) {
-                    oldUserSnap.documents.first().reference.update("role", "super_admin").await()
-                }
-            } catch (_: Exception) {}
-
-            logAudit(currentOwnerUid, "admin_transfer_owner", "", 0, "$currentOwner->$cleanNew")
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
+                logAudit(currentOwnerUid, "admin_transfer_owner", "", 0, "$currentOwner->$cleanNew")
+                Result.success(Unit)
+            } catch (e: Exception) { Result.failure(e) }
         }
-    }
 
     private fun hashEmail(email: String): String =
         email.lowercase().trim().replace("@", "_at_").replace(".", "_dot_")
 
     // ============================================================
-    //  PAYMENT REVIEW (owner-only)
+    //  PAYMENTS — client-side sort, no index
     // ============================================================
-    suspend fun listPendingPayments(limit: Long = 100): List<PaymentRequest> = withContext(Dispatchers.IO) {
-        try {
-            db.collection(FirebaseConfig.COL_PAYMENT_REQUESTS)
-                .whereEqualTo("status", "pending")
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(limit)
-                .get().await()
-                .documents.mapNotNull { parsePaymentRequest(it.id, it.data ?: emptyMap()) }
-        } catch (e: Exception) {
-            emptyList()
+    suspend fun listPendingPayments(limit: Long = 100): List<PaymentRequest> =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_PAYMENT_REQUESTS)
+                    .whereEqualTo("status", "pending")
+                    .limit(300)
+                    .get().await()
+                    .documents
+                    .mapNotNull { parsePaymentRequest(it.id, it.data ?: emptyMap()) }
+                    .sortedByDescending { it.createdAt }
+                    .take(limit.toInt())
+            } catch (e: Exception) {
+                Log.e("AdminService", "listPendingPayments failed", e)
+                emptyList()
+            }
         }
-    }
 
     suspend fun approvePayment(requestId: String, adminUid: String): Result<Unit> = withContext(Dispatchers.IO) {
         val reqRef = db.collection(FirebaseConfig.COL_PAYMENT_REQUESTS).document(requestId)
@@ -928,9 +867,7 @@ class AdminService {
             } catch (_: Exception) {}
 
             Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        } catch (e: Exception) { Result.failure(e) }
     }
 
     suspend fun rejectPayment(
@@ -974,9 +911,7 @@ class AdminService {
             } catch (_: Exception) {}
 
             Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        } catch (e: Exception) { Result.failure(e) }
     }
 
     private fun parsePaymentRequest(id: String, map: Map<String, Any?>): PaymentRequest {
@@ -1003,7 +938,7 @@ class AdminService {
     }
 
     // ============================================================
-    //  ACCOUNT ANALYSIS — delegates to UserDataService
+    //  ANALYTICS helpers
     // ============================================================
     suspend fun analyzeAccounts(): AccountAnalysis = withContext(Dispatchers.IO) {
         try {
@@ -1026,9 +961,6 @@ class AdminService {
 
     suspend fun findDuplicateGroups(): List<DuplicateGroup> = userData.findDuplicateGroups()
 
-    // ============================================================
-    //  SOFT DELETE — delegates
-    // ============================================================
     suspend fun softDeleteUser(uid: String, adminUid: String, reason: String = "admin-deleted"): Boolean =
         userData.softDeleteUser(uid, adminUid, reason)
 
