@@ -1,5 +1,6 @@
 package com.sanji.bomberpro.services
 
+import com.sanji.bomberpro.data.GlobalSettings
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -25,6 +26,8 @@ sealed class BlastEvent {
         val devices: Int,
         val reservedCredits: Int,
         val powerMode: Int,
+        /** Credits the user will actually be billed at completion (base count × creditCost, admin = 0) */
+        val chargeableBase: Int = 0,
     ) : BlastEvent()
 
     data class Progress(
@@ -39,6 +42,9 @@ sealed class BlastEvent {
         val failed: Int,
         val durationSec: Long,
         val cancelled: Boolean,
+        /** Credits actually charged to the user at end of run */
+        val chargedCredits: Int,
+        /** Credits refunded (reserved but not sent) */
         val refundedCredits: Int,
         val finalBalance: Int,
     ) : BlastEvent()
@@ -55,9 +61,19 @@ enum class BlastSpeed(val delayMs: Long, val label: String) {
 class BlastExecutor(private val rtdb: RealtimeDbService) {
 
     /**
-     * @param count   base number of sends requested by user
-     * @param power   power multiplier (2, 3, 4, 5, 10)
-     * @param threads max concurrent sends (default 20)
+     * Blast executor.
+     *
+     * BILLING MODEL:
+     *  - User pays `count × creditCostPerSms` (base count ONLY).
+     *  - Power is a FREE multiplier — sends go up to `count × power`, device-capped.
+     *  - Admin never pays.
+     *  - Credits are reserved upfront (= count × creditCostPerSms).
+     *  - On completion, unsent portion is refunded → user pays only for what actually sent.
+     *  - Balance NEVER goes negative.
+     *
+     * STOP BEHAVIOR:
+     *  - cancelFlag.set(true) → in-flight sends finish, no new sends start.
+     *  - Every send checks flag before dispatch.
      */
     fun execute(
         uid: String,
@@ -73,6 +89,7 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
         threads: Int,
         speed: BlastSpeed,
         cancelFlag: AtomicBoolean,
+        creditCostPerSms: Int = 1,
     ): Flow<BlastEvent> = callbackFlow {
         if (devices.isEmpty()) {
             trySend(BlastEvent.Error("No devices online"))
@@ -86,41 +103,80 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
         }
 
         // -----------------------------------------------------------
-        //  total = count × power  (matches bot behavior)
+        //  BILLING SETUP
+        //  desiredSends = count × power  (all sends we'll attempt)
+        //  chargeableBase = count × creditCost  (what user pays IF all send)
+        //  reservedCredits = chargeableBase  (hold upfront)
+        //  deviceCap = devices × power  (can't physically send more than this)
         // -----------------------------------------------------------
-        val desiredTotal = count * power
-        val deviceCapacity = devices.size * power
-        val effectiveTotal = min(desiredTotal, deviceCapacity)
+        val safePower = power.coerceAtLeast(1)
+        val safeCost = creditCostPerSms.coerceAtLeast(0)
 
-        // -----------------------------------------------------------
-        //  reserve credits upfront = min(effectiveTotal, user credits)
-        // -----------------------------------------------------------
-        val reserved: Int = if (isAdmin) effectiveTotal
-        else minOf(effectiveTotal, userData.getCredits(uid))
+        val desiredSends = count * safePower
+        val deviceCap = devices.size * safePower
+        val effectiveSends = min(desiredSends, deviceCap)
+
+        // Max credits user could be charged (admin = 0)
+        val maxChargeable = if (isAdmin) 0 else (count * safeCost).coerceAtLeast(0)
+
+        // Reserve upfront — min(chargeable, current balance) for user
+        val currentBalance = if (isAdmin) 0 else userData.getCredits(uid)
+        val reservedCredits = if (isAdmin) 0 else min(maxChargeable, currentBalance)
 
         if (!isAdmin) {
-            if (reserved <= 0) {
-                trySend(BlastEvent.Error("No credits available"))
+            if (reservedCredits <= 0 || (safeCost > 0 && currentBalance < safeCost)) {
+                trySend(BlastEvent.Error("Insufficient credits"))
                 close()
                 return@callbackFlow
             }
-            if (!userData.deductCredits(uid, reserved, "blast-reserve")) {
-                trySend(BlastEvent.Error("Insufficient credits"))
+            if (!userData.forceDeductCredits(uid, reservedCredits, "blast-reserve")) {
+                trySend(BlastEvent.Error("Credit reserve failed"))
                 close()
                 return@callbackFlow
             }
         }
 
-        val total = reserved
+        val total = effectiveSends
         val sent = AtomicInteger(0)
         val failed = AtomicInteger(0)
         val startedAt = System.currentTimeMillis()
         val deviceLabels = devices.map { it.firebaseLabel }.distinct()
 
-        trySend(BlastEvent.Started(total, devices.size, reserved, power))
+        // Max base units we'll ever charge — user pays at most this × costPerSms
+        // Each "base unit" = one SMS equivalent at creditCostPerSms
+        // e.g. count=10, cost=1, power=2 → maxChargeable=10 credits
+        //      if we send 20 SMS, we still only charge 10 credits
+        //      because those 10 base units cover the 20 power-extended sends.
+        //
+        // Charging formula at end:
+        //   baseUnitsSent = min(count, ceil(sent / power))
+        //   charged = baseUnitsSent × creditCostPerSms
+        // But simpler & safer: charged = min(reservedCredits, actualSent × creditCostPerSms)
+        //   — but that overcharges when power>1.
+        //
+        // BEST: charged = reservedCredits × (actualSent / total)  (proportional refund)
+        //   BUT if user stopped early at 5/20 sent → refund half.
+        //
+        // FINAL FORMULA (safe, predictable, power-friendly):
+        //   baseSentFraction = actualSent / effectiveSends
+        //   charged = reservedCredits × baseSentFraction  (rounded down)
+        //   refund  = reservedCredits - charged
+        //
+        // This means: user pays proportional to % of planned sends that succeeded.
+        // Power = free. Credit math independent of power.
+
+        trySend(
+            BlastEvent.Started(
+                total = total,
+                devices = devices.size,
+                reservedCredits = reservedCredits,
+                powerMode = safePower,
+                chargeableBase = maxChargeable,
+            )
+        )
 
         // -----------------------------------------------------------
-        //  per-device cooldown protected by mutex
+        //  Per-device cooldown
         // -----------------------------------------------------------
         val deviceCooldownMutex = Mutex()
         val deviceLastSend = mutableMapOf<String, Long>()
@@ -144,21 +200,20 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
 
         try {
             coroutineScope {
-                // build job list of `total` sends
-                // pass_num = index / devices.size  → determines which SIM to use
-                //              and gives natural rotation
                 val jobs = (0 until total).map { i ->
                     async {
+                        // Check before entering permit — huge win for instant stop
                         if (cancelFlag.get()) return@async
 
                         semaphore.withPermit {
+                            // Check again inside permit — critical
                             if (cancelFlag.get()) return@withPermit
                             if (sent.get() + failed.get() >= total) return@withPermit
 
                             val device = devices[i % devices.size]
                             val passNum = i / devices.size
 
-                            // cooldown read+write inside lock
+                            // Cooldown
                             val waitMs = deviceCooldownMutex.withLock {
                                 val now = System.currentTimeMillis()
                                 val last = deviceLastSend[device.deviceId] ?: 0L
@@ -173,7 +228,9 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
                             }
                             if (waitMs > 0) delay(waitMs)
 
-                            // SIM rotation (bot parity)
+                            // One more cancel check before actual network call
+                            if (cancelFlag.get()) return@withPermit
+
                             val sim = simSlotFor(device, passNum)
 
                             val result = rtdb.sendSms(
@@ -205,12 +262,26 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
                 val actualFailed = failed.get()
                 val duration = (System.currentTimeMillis() - startedAt) / 1000L
 
-                // ------------------------------------------------
-                //  REFUND
-                //  reserved credits were deducted upfront.
-                //  Anything not sent (failed OR cancelled) is refunded.
-                // ------------------------------------------------
-                val refundAmount: Int = if (isAdmin) 0 else (reserved - actualSent).coerceAtLeast(0)
+                // -------------------------------------------------
+                //  BILLING — proportional charge
+                //  charged = reservedCredits × (sent / total)
+                //  refund  = reservedCredits - charged
+                //  (never negative, always ≤ reserved)
+                // -------------------------------------------------
+                val chargedCredits: Int = if (isAdmin) {
+                    0
+                } else if (total <= 0) {
+                    0
+                } else {
+                    val fraction = actualSent.toDouble() / total.toDouble()
+                    val raw = (reservedCredits * fraction).toInt()
+                    raw.coerceIn(0, reservedCredits)
+                }
+
+                val refundAmount: Int = if (isAdmin) 0 else {
+                    (reservedCredits - chargedCredits).coerceAtLeast(0)
+                }
+
                 if (refundAmount > 0) {
                     try {
                         userData.addCredits(uid, refundAmount, "blast-refund")
@@ -219,9 +290,9 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
 
                 val finalBalance = if (isAdmin) 0 else userData.getCredits(uid)
 
-                // ------------------------------------------------
-                //  SAVE HISTORY
-                // ------------------------------------------------
+                // -------------------------------------------------
+                //  HISTORY
+                // -------------------------------------------------
                 try {
                     userData.saveBlastHistory(
                         uid = uid,
@@ -231,15 +302,15 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
                         sent = actualSent,
                         failed = actualFailed,
                         durationSec = duration,
-                        speed = "${speed.label} ${power}x",
+                        speed = "${speed.label} ${safePower}x",
                         devicePool = deviceLabels,
                         status = if (wasCancelled) "stopped" else "completed",
                     )
                 } catch (_: Exception) {}
 
-                // ------------------------------------------------
+                // -------------------------------------------------
                 //  ACTIVITY LOG
-                // ------------------------------------------------
+                // -------------------------------------------------
                 try {
                     userData.logActivity(
                         uid = uid,
@@ -254,10 +325,11 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
                             "sent" to actualSent,
                             "failed" to actualFailed,
                             "speed" to speed.label,
-                            "power" to power,
+                            "power" to safePower,
                             "duration" to duration,
                             "devicePool" to deviceLabels,
-                            "reserved" to reserved,
+                            "reserved" to reservedCredits,
+                            "charged" to chargedCredits,
                             "refunded" to refundAmount,
                             "cancelled" to wasCancelled,
                         ),
@@ -270,6 +342,7 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
                         failed = actualFailed,
                         durationSec = duration,
                         cancelled = wasCancelled,
+                        chargedCredits = chargedCredits,
                         refundedCredits = refundAmount,
                         finalBalance = finalBalance,
                     )
@@ -282,8 +355,7 @@ class BlastExecutor(private val rtdb: RealtimeDbService) {
     }
 
     /**
-     * Choose SIM slot for this pass.
-     * Bot rotates sims[passNum % len(sims)].
+     * SIM slot rotation — matches bot behavior.
      */
     private fun simSlotFor(device: Device, passNum: Int): Int {
         if (device.sims.isEmpty()) return 0
