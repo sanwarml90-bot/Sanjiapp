@@ -71,17 +71,18 @@ fun TemplatesScreen(
 
     suspend fun refresh() {
         loading = true
-        templates = service.listTemplates(uid)
-        loading = false
+        try {
+            templates = service.listTemplates(uid)
+            error = null
+        } catch (e: Exception) {
+            error = "Load failed: ${e.message ?: e.javaClass.simpleName}"
+            templates = emptyList()
+        } finally {
+            loading = false
+        }
     }
 
     LaunchedEffect(Unit) { refresh() }
-    LaunchedEffect(error) {
-        if (error != null) {
-            kotlinx.coroutines.delay(4000)
-            error = null
-        }
-    }
 
     Column(
         modifier = Modifier.fillMaxSize().background(colors.background).padding(16.dp),
@@ -107,6 +108,25 @@ fun TemplatesScreen(
                 CircularProgressIndicator(color = colors.primary)
             }
             return
+        }
+
+        if (error != null) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = colors.error.copy(alpha = 0.12f),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        "${SanjiEmoji.ERROR} $error",
+                        fontSize = 12.sp, color = colors.error, fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(onClick = { scope.launch { refresh() } }) {
+                        Text("Retry", color = colors.primary, fontSize = 12.sp)
+                    }
+                }
+            }
         }
 
         if (templates.isEmpty()) {
@@ -178,11 +198,6 @@ fun TemplatesScreen(
                 }
             }
         }
-
-        if (error != null) {
-            Spacer(Modifier.height(8.dp))
-            Text(error!!, color = colors.error, fontSize = 12.sp)
-        }
     }
 
     if (showCreate) {
@@ -198,7 +213,7 @@ fun TemplatesScreen(
                     if (result.isSuccess) {
                         refresh()
                     } else {
-                        error = result.exceptionOrNull()?.message ?: "Save failed"
+                        error = "Save failed: ${result.exceptionOrNull()?.message ?: "unknown"}"
                     }
                 }
             },
@@ -219,7 +234,7 @@ fun TemplatesScreen(
                     if (result.isSuccess) {
                         refresh()
                     } else {
-                        error = result.exceptionOrNull()?.message ?: "Update failed"
+                        error = "Update failed: ${result.exceptionOrNull()?.message ?: "unknown"}"
                     }
                 }
             },
