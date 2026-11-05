@@ -1,7 +1,6 @@
 package com.sanji.bomberpro.ui.splash
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -27,10 +26,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,14 +41,12 @@ import kotlinx.coroutines.delay
 fun SplashScreen(onFinished: () -> Unit) {
     val colors = LocalSanjiColors.current
 
-    // Staged entry animations
     val logoScale = remember { Animatable(0.5f) }
     val logoAlpha = remember { Animatable(0f) }
     val subtitleAlpha = remember { Animatable(0f) }
     val taglineAlpha = remember { Animatable(0f) }
     val glowAlpha = remember { Animatable(0f) }
 
-    // Ambient background pulse
     val transition = rememberInfiniteTransition(label = "splashAmbient")
     val glowShift by transition.animateFloat(
         initialValue = 0f,
@@ -60,10 +58,8 @@ fun SplashScreen(onFinished: () -> Unit) {
         label = "glowShift",
     )
 
-    // Rotating ring
     val rotation = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
-        // Spin forever in background
         while (true) {
             rotation.animateTo(
                 targetValue = rotation.value + 360f,
@@ -73,7 +69,6 @@ fun SplashScreen(onFinished: () -> Unit) {
     }
 
     LaunchedEffect(Unit) {
-        // 1. Glow ring appears + logo springs in
         glowAlpha.animateTo(1f, tween(300))
         logoAlpha.animateTo(1f, tween(250))
         logoScale.animateTo(
@@ -83,16 +78,10 @@ fun SplashScreen(onFinished: () -> Unit) {
                 stiffness = 240f,
             ),
         )
-
-        // 2. Subtitle slides in
         delay(120)
         subtitleAlpha.animateTo(1f, tween(350))
-
-        // 3. Tagline fades in
         delay(180)
         taglineAlpha.animateTo(1f, tween(400))
-
-        // 4. Hold, then finish
         delay(850)
         onFinished()
     }
@@ -111,7 +100,6 @@ fun SplashScreen(onFinished: () -> Unit) {
             ),
         contentAlignment = Alignment.Center,
     ) {
-        // Ambient glow behind logo
         Box(
             modifier = Modifier
                 .size(280.dp)
@@ -121,7 +109,7 @@ fun SplashScreen(onFinished: () -> Unit) {
                         colors = listOf(
                             colors.primary.copy(alpha = 0.20f),
                             colors.primary.copy(alpha = 0.05f),
-                            androidx.compose.ui.graphics.Color.Transparent,
+                            Color.Transparent,
                         ),
                         center = Offset.Unspecified,
                     ),
@@ -129,26 +117,24 @@ fun SplashScreen(onFinished: () -> Unit) {
                 )
         )
 
-        // Rotating ring
         Box(
             modifier = Modifier
                 .size(140.dp)
                 .alpha(glowAlpha.value * 0.9f)
-                .androidxRotate(rotation.value)
+                .graphicsLayer { rotationZ = rotation.value }
                 .background(
                     brush = Brush.sweepGradient(
                         colors = listOf(
-                            androidx.compose.ui.graphics.Color.Transparent,
+                            Color.Transparent,
                             colors.primary.copy(alpha = 0.55f),
                             colors.secondary.copy(alpha = 0.55f),
-                            androidx.compose.ui.graphics.Color.Transparent,
+                            Color.Transparent,
                         ),
                         center = Offset.Unspecified,
                     ),
                     shape = CircleShape,
-                )
+                ),
         ) {
-            // Inner cutout to create ring look
             Box(
                 modifier = Modifier
                     .size(120.dp)
@@ -203,8 +189,3 @@ fun SplashScreen(onFinished: () -> Unit) {
         }
     }
 }
-
-private fun Modifier.androidxRotate(degrees: Float): Modifier =
-    androidx.compose.ui.graphics.graphicsLayer {
-        rotationZ = degrees
-    }
