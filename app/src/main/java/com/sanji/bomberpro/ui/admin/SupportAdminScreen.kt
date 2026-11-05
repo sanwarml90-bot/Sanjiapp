@@ -58,12 +58,6 @@ private val FMT_SHORT = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
 private fun fmtShort(ts: Long): String =
     try { FMT_SHORT.format(Date(ts * 1000L)) } catch (_: Exception) { "—" }
 
-/**
- * Support tickets admin view.
- *
- * NOTE: Ban appeals are handled by a SEPARATE screen — AppealsAdminScreen (uses `appeals` collection).
- * This screen is ONLY for support tickets (`tickets` collection). Clean separation, no duplication.
- */
 @Composable
 fun SupportAdminScreen(
     adminUid: String,
@@ -75,7 +69,6 @@ fun SupportAdminScreen(
     val scope = rememberCoroutineScope()
 
     var view by remember { mutableStateOf(SupportAdminView.TICKETS) }
-
     var tickets by remember { mutableStateOf<List<Ticket>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var selectedTicket by remember { mutableStateOf<Ticket?>(null) }
@@ -257,7 +250,7 @@ fun SupportAdminScreen(
                             modifier = Modifier.height(56.dp).pressScale(),
                             shape = RoundedCornerShape(12.dp),
                         ) {
-                            Icon(Icons.Default.Send, "Send", tint = colors.onPrimary)
+                            Icon(Icons.Default.Send, "Send", tint = Color.Black)
                         }
                     }
                 } else {
