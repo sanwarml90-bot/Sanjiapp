@@ -7,6 +7,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -49,9 +50,9 @@ enum class AppTheme(
     MIDNIGHT_AMETHYST(
         id = "midnight_amethyst",
         displayName = "Midnight Amethyst",
-        primary = Color(0xFF7C3AED),
+        primary = Color(0xFF9F7AEA),
         secondary = Color(0xFFEC4899),
-        accent = Color(0xFFA78BFA),
+        accent = Color(0xFFC4B5FD),
         background = Color(0xFF0D0417),
         surface = Color(0xFF1A0B2E),
         onBackground = Color(0xFFF3E8FF),
@@ -61,8 +62,8 @@ enum class AppTheme(
         id = "matrix_zero",
         displayName = "Matrix Zero",
         primary = Color(0xFF00FF41),
-        secondary = Color(0xFF008F11),
-        accent = Color(0xFF00B32C),
+        secondary = Color(0xFF00B32C),
+        accent = Color(0xFF7CFF7C),
         background = Color(0xFF000000),
         surface = Color(0xFF0A1A0A),
         onBackground = Color(0xFFC6FFC6),
@@ -103,7 +104,26 @@ data class SanjiColors(
     val success: Color = Color(0xFF22C55E),
     val warning: Color = Color(0xFFF59E0B),
     val error: Color = Color(0xFFEF4444),
-)
+    val cardElevated: Color = Color(0xFF1A1A1F),
+    val outline: Color = Color(0xFF2A2A2F),
+    val shimmerBase: Color = Color(0xFF1A1A1A),
+    val shimmerHighlight: Color = Color(0xFF2A2A2A),
+) {
+    /** Primary → secondary horizontal gradient for hero sections. */
+    val heroBrush: Brush
+        get() = Brush.linearGradient(listOf(primary, secondary))
+
+    /** Diagonal fade for backgrounds. */
+    val ambientBrush: Brush
+        get() = Brush.linearGradient(
+            listOf(
+                background,
+                primary.copy(alpha = 0.06f),
+                background,
+                secondary.copy(alpha = 0.05f),
+            )
+        )
+}
 
 val LocalSanjiColors = staticCompositionLocalOf {
     SanjiColors(
@@ -124,8 +144,14 @@ private val JetBrainsMono = FontFamily.Monospace
 private val SanjiTypography = Typography(
     displayLarge = TextStyle(
         fontFamily = SpaceGrotesk,
-        fontWeight = FontWeight.Bold,
-        fontSize = 32.sp,
+        fontWeight = FontWeight.Black,
+        fontSize = 34.sp,
+        letterSpacing = (-0.7).sp,
+    ),
+    displayMedium = TextStyle(
+        fontFamily = SpaceGrotesk,
+        fontWeight = FontWeight.Black,
+        fontSize = 28.sp,
         letterSpacing = (-0.5).sp,
     ),
     headlineLarge = TextStyle(
@@ -143,6 +169,11 @@ private val SanjiTypography = Typography(
         fontWeight = FontWeight.SemiBold,
         fontSize = 18.sp,
     ),
+    titleMedium = TextStyle(
+        fontFamily = SpaceGrotesk,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 15.sp,
+    ),
     bodyLarge = TextStyle(
         fontFamily = Inter,
         fontWeight = FontWeight.Normal,
@@ -152,6 +183,11 @@ private val SanjiTypography = Typography(
         fontFamily = Inter,
         fontWeight = FontWeight.Normal,
         fontSize = 13.sp,
+    ),
+    bodySmall = TextStyle(
+        fontFamily = Inter,
+        fontWeight = FontWeight.Normal,
+        fontSize = 11.sp,
     ),
     labelLarge = TextStyle(
         fontFamily = SpaceGrotesk,
@@ -177,11 +213,14 @@ fun SanjiTheme(
             tertiary = theme.accent,
             background = theme.background,
             surface = theme.surface,
+            surfaceVariant = theme.surface,
             onPrimary = Color.Black,
             onSecondary = Color.Black,
             onTertiary = Color.Black,
             onBackground = theme.onBackground,
             onSurface = theme.onBackground,
+            onSurfaceVariant = theme.onBackground.copy(alpha = 0.7f),
+            outline = theme.primary.copy(alpha = 0.15f),
             error = Color(0xFFEF4444),
         )
     } else {
@@ -191,11 +230,14 @@ fun SanjiTheme(
             tertiary = theme.accent,
             background = theme.background,
             surface = theme.surface,
+            surfaceVariant = theme.surface,
             onPrimary = Color.White,
             onSecondary = Color.White,
             onTertiary = Color.White,
             onBackground = theme.onBackground,
             onSurface = theme.onBackground,
+            onSurfaceVariant = theme.onBackground.copy(alpha = 0.7f),
+            outline = theme.primary.copy(alpha = 0.15f),
             error = Color(0xFFDC2626),
         )
     }
@@ -208,6 +250,10 @@ fun SanjiTheme(
         surface = theme.surface,
         onBackground = theme.onBackground,
         onSurfaceVariant = theme.onBackground.copy(alpha = 0.7f),
+        cardElevated = if (theme.isDark) theme.surface.copy(alpha = 0.85f) else theme.surface,
+        outline = theme.primary.copy(alpha = 0.18f),
+        shimmerBase = if (theme.isDark) Color(0xFF1A1A1A) else Color(0xFFE8E8EC),
+        shimmerHighlight = if (theme.isDark) Color(0xFF2A2A2A) else Color(0xFFF0F0F5),
     )
 
     CompositionLocalProvider(LocalSanjiColors provides sanjiColors) {
