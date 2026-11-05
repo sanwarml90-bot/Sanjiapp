@@ -5,6 +5,9 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.sanji.bomberpro.FirebaseConfig
+import com.sanji.bomberpro.data.AccountAnalysis
+import com.sanji.bomberpro.data.AnalyzedUser
+import com.sanji.bomberpro.data.DuplicateGroup
 import com.sanji.bomberpro.data.FirebaseNode
 import com.sanji.bomberpro.data.PaymentRequest
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +54,7 @@ data class AdminUser(
     val androidVersion: String = "",
     val sdkInt: Int = 0,
     val deviceReportedAt: Long = 0L,
+    val deviceFingerprint: String = "",
 )
 
 data class RoleEntry(
@@ -66,9 +70,16 @@ data class RolesList(
     val admins: List<RoleEntry>,
 )
 
+data class BulkDeductResult(
+    val usersAffected: Int = 0,
+    val totalCreditsRemoved: Int = 0,
+    val mode: String = "amount",
+)
+
 class AdminService {
 
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance()
+    private val userData = UserDataService()
 
     // ============================================================
     //  FIREBASES
@@ -128,6 +139,41 @@ class AdminService {
             false
         }
     }
+
+    /**
+     * Delete a batch of firebases in one call.
+     * Used by "Kill Dead Firebases" button after test runs.
+     * Returns count actually deleted.
+     */
+    suspend fun deleteFirebases(ids: List<String>, adminUid: String): Int =
+        withContext(Dispatchers.IO) {
+            if (ids.isEmpty()) return@withContext 0
+            try {
+                var deleted = 0
+                val chunks = ids.chunked(400)
+                for (chunk in chunks) {
+                    val batch = db.batch()
+                    for (id in chunk) {
+                        batch.delete(db.collection(FirebaseConfig.COL_FIREBASES).document(id))
+                    }
+                    batch.commit().await()
+                    deleted += chunk.size
+                }
+                try {
+                    db.collection(FirebaseConfig.COL_AUDIT_LOG).add(
+                        mapOf(
+                            "adminUid" to adminUid,
+                            "action" to "firebases_kill_dead",
+                            "targetUid" to "",
+                            "amount" to deleted.toLong(),
+                            "reason" to "batch-deleted",
+                            "ts" to System.currentTimeMillis() / 1000L,
+                        )
+                    ).await()
+                } catch (_: Exception) {}
+                deleted
+            } catch (e: Exception) { 0 }
+        }
 
     suspend fun toggleFirebase(id: String, enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -197,8 +243,8 @@ class AdminService {
             username = map["username"] as? String ?: "",
             photoUrl = map["photoUrl"] as? String,
             role = map["role"] as? String ?: "user",
-            credits = (map["credits"] as? Number)?.toInt() ?: 0,
-            coins = (map["coins"] as? Number)?.toInt() ?: 0,
+            credits = (map["credits"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
+            coins = (map["coins"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
             manualAddedCredits = (map["manualAddedCredits"] as? Number)?.toInt() ?: 0,
             manualAddedCoins = (map["manualAddedCoins"] as? Number)?.toInt() ?: 0,
             totalBlasts = (map["totalBlasts"] as? Number)?.toInt() ?: 0,
@@ -230,6 +276,7 @@ class AdminService {
             androidVersion = (dev?.get("androidVersion") as? String) ?: "",
             sdkInt = (dev?.get("sdkInt") as? Number)?.toInt() ?: 0,
             deviceReportedAt = (dev?.get("reportedAt") as? Number)?.toLong() ?: 0L,
+            deviceFingerprint = (dev?.get("fingerprint") as? String) ?: "",
         )
     }
 
@@ -258,22 +305,27 @@ class AdminService {
             if (amount <= 0) return@withContext false
             val ref = db.collection(FirebaseConfig.COL_USERS).document(uid)
             try {
+                var actual = 0
                 db.runTransaction { txn ->
                     val snap = txn.get(ref)
-                    val current = (snap.getLong("credits") ?: 0L).toInt()
-                    if (current < amount) throw IllegalStateException("INSUFFICIENT_CREDITS")
-                    val manual = (snap.getLong("manualAddedCredits") ?: 0L).toInt()
-                    val cut = minOf(amount, manual).coerceAtLeast(0)
-                    txn.update(
-                        ref,
-                        "credits", (current - amount).toLong(),
-                        "manualAddedCredits", (manual - cut).toLong().coerceAtLeast(0L),
-                    )
-                    Unit
+                    val current = (snap.getLong("credits") ?: 0L).toInt().coerceAtLeast(0)
+                    val cut = amount.coerceAtMost(current)
+                    val manual = (snap.getLong("manualAddedCredits") ?: 0L).toInt().coerceAtLeast(0)
+                    val manualCut = cut.coerceAtMost(manual)
+                    actual = cut
+                    if (cut > 0) {
+                        txn.update(
+                            ref,
+                            "credits", (current - cut).toLong(),
+                            "manualAddedCredits", (manual - manualCut).toLong().coerceAtLeast(0),
+                        )
+                    }
                 }.await()
-                logTransaction(uid, "credit_deduct", -amount, "admin-deduct")
-                logAudit(adminUid, "admin_credit_deduct", uid, amount, "")
-                true
+                if (actual > 0) {
+                    logTransaction(uid, "credit_deduct", -actual, "admin-deduct")
+                    logAudit(adminUid, "admin_credit_deduct", uid, actual, "")
+                }
+                actual > 0
             } catch (e: Exception) {
                 false
             }
@@ -301,29 +353,34 @@ class AdminService {
             if (amount <= 0) return@withContext false
             val ref = db.collection(FirebaseConfig.COL_USERS).document(uid)
             try {
+                var actual = 0
                 db.runTransaction { txn ->
                     val snap = txn.get(ref)
-                    val current = (snap.getLong("coins") ?: 0L).toInt()
-                    if (current < amount) throw IllegalStateException("INSUFFICIENT_COINS")
-                    val manual = (snap.getLong("manualAddedCoins") ?: 0L).toInt()
-                    val cut = minOf(amount, manual).coerceAtLeast(0)
-                    txn.update(
-                        ref,
-                        "coins", (current - amount).toLong(),
-                        "manualAddedCoins", (manual - cut).toLong().coerceAtLeast(0L),
-                    )
-                    Unit
+                    val current = (snap.getLong("coins") ?: 0L).toInt().coerceAtLeast(0)
+                    val cut = amount.coerceAtMost(current)
+                    val manual = (snap.getLong("manualAddedCoins") ?: 0L).toInt().coerceAtLeast(0)
+                    val manualCut = cut.coerceAtMost(manual)
+                    actual = cut
+                    if (cut > 0) {
+                        txn.update(
+                            ref,
+                            "coins", (current - cut).toLong(),
+                            "manualAddedCoins", (manual - manualCut).toLong().coerceAtLeast(0),
+                        )
+                    }
                 }.await()
-                logTransaction(uid, "coin_deduct", -amount, "admin-deduct")
-                logAudit(adminUid, "admin_coin_deduct", uid, amount, "")
-                true
+                if (actual > 0) {
+                    logTransaction(uid, "coin_deduct", -actual, "admin-deduct")
+                    logAudit(adminUid, "admin_coin_deduct", uid, actual, "")
+                }
+                actual > 0
             } catch (e: Exception) {
                 false
             }
         }
 
     // ============================================================
-    //  BULK ADD / DEDUCT
+    //  BULK ADD / DEDUCT (amount OR all)
     // ============================================================
     suspend fun addCreditsToAll(amount: Int, adminUid: String): Result<Int> = withContext(Dispatchers.IO) {
         if (amount <= 0) return@withContext Result.failure(Exception("Amount must be > 0"))
@@ -350,28 +407,83 @@ class AdminService {
         }
     }
 
-    suspend fun deductCreditsFromAll(amount: Int, adminUid: String): Result<Int> = withContext(Dispatchers.IO) {
-        if (amount < 0) return@withContext Result.failure(Exception("Amount must be >= 0"))
+    /**
+     * Deduct from all users.
+     * mode = "amount" → deducts `amount` from each user's manual pool only (purchased credits untouched)
+     * mode = "all"    → wipes ALL credits + manual pool to 0
+     */
+    suspend fun deductCreditsFromAll(
+        amount: Int,
+        adminUid: String,
+        mode: String = "amount",
+    ): Result<BulkDeductResult> = withContext(Dispatchers.IO) {
         try {
             val users = db.collection(FirebaseConfig.COL_USERS).get().await().documents
-            var totalDeducted = 0
             var usersAffected = 0
+            var totalRemoved = 0
+            val isWipeAll = mode == "all"
+
             for (u in users) {
                 try {
-                    val man = (u.getLong("manualAddedCredits") ?: 0L).toInt()
-                    if (man <= 0) continue
-                    val cut = minOf(amount, man)
-                    if (cut <= 0) continue
-                    u.reference.update(
-                        "credits", FieldValue.increment(-cut.toLong()),
-                        "manualAddedCredits", FieldValue.increment(-cut.toLong()),
-                    ).await()
-                    totalDeducted += cut
-                    usersAffected++
+                    if (isWipeAll) {
+                        var wiped = 0
+                        db.runTransaction { txn ->
+                            val snap = txn.get(u.reference)
+                            val current = (snap.getLong("credits") ?: 0L).toInt().coerceAtLeast(0)
+                            wiped = current
+                            if (current > 0) {
+                                txn.update(
+                                    u.reference,
+                                    "credits", 0L,
+                                    "manualAddedCredits", 0L,
+                                )
+                            }
+                        }.await()
+                        if (wiped > 0) {
+                            totalRemoved += wiped
+                            usersAffected++
+                            try {
+                                db.collection(FirebaseConfig.COL_TRANSACTIONS).add(
+                                    mapOf(
+                                        "uid" to u.id,
+                                        "type" to "credit_deduct",
+                                        "delta" to (-wiped).toLong(),
+                                        "reason" to "admin-wipe-all",
+                                        "ts" to System.currentTimeMillis() / 1000L,
+                                    )
+                                ).await()
+                            } catch (_: Exception) {}
+                        }
+                    } else {
+                        val man = (u.getLong("manualAddedCredits") ?: 0L).toInt().coerceAtLeast(0)
+                        if (man <= 0) continue
+                        val cut = amount.coerceAtMost(man)
+                        if (cut <= 0) continue
+                        u.reference.update(
+                            "credits", FieldValue.increment(-cut.toLong()),
+                            "manualAddedCredits", FieldValue.increment(-cut.toLong()),
+                        ).await()
+                        totalRemoved += cut
+                        usersAffected++
+                    }
                 } catch (_: Exception) {}
             }
-            logAudit(adminUid, "admin_credit_deduct_all", "", amount, "got=$totalDeducted from=$usersAffected")
-            Result.success(usersAffected)
+
+            logAudit(
+                adminUid,
+                if (isWipeAll) "admin_credit_deduct_all_wipe" else "admin_credit_deduct_all",
+                "",
+                amount,
+                "affected=$usersAffected removed=$totalRemoved mode=$mode",
+            )
+
+            Result.success(
+                BulkDeductResult(
+                    usersAffected = usersAffected,
+                    totalCreditsRemoved = totalRemoved,
+                    mode = mode,
+                )
+            )
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -889,6 +1001,40 @@ class AdminService {
             rejectionReason = map["rejectionReason"] as? String ?: "",
         )
     }
+
+    // ============================================================
+    //  ACCOUNT ANALYSIS — delegates to UserDataService
+    // ============================================================
+    suspend fun analyzeAccounts(): AccountAnalysis = withContext(Dispatchers.IO) {
+        try {
+            val (inactive, dead) = userData.analyzeAccounts()
+            val duplicates = userData.findDuplicateGroups()
+            val total = try {
+                db.collection(FirebaseConfig.COL_USERS).get().await().size()
+            } catch (_: Exception) { inactive.size + dead.size }
+            AccountAnalysis(
+                totalUsers = total,
+                inactive = inactive,
+                dead = dead,
+                duplicateGroups = duplicates,
+                computedAt = System.currentTimeMillis() / 1000L,
+            )
+        } catch (e: Exception) {
+            AccountAnalysis(computedAt = System.currentTimeMillis() / 1000L)
+        }
+    }
+
+    suspend fun findDuplicateGroups(): List<DuplicateGroup> = userData.findDuplicateGroups()
+
+    // ============================================================
+    //  SOFT DELETE — delegates
+    // ============================================================
+    suspend fun softDeleteUser(uid: String, adminUid: String, reason: String = "admin-deleted"): Boolean =
+        userData.softDeleteUser(uid, adminUid, reason)
+
+    suspend fun listDeletedAccounts(limit: Long = 200) = userData.listDeletedAccounts(limit)
+
+    suspend fun getDeletedAccount(uid: String) = userData.getDeletedAccount(uid)
 
     // ============================================================
     //  LOGGING
