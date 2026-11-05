@@ -1,5 +1,7 @@
 package com.sanji.bomberpro.ui.wallet
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -44,8 +47,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -60,6 +66,10 @@ import com.sanji.bomberpro.services.SubscriptionPlan
 import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.AnimatedCounter
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import com.sanji.bomberpro.ui.payment.PaymentSubmitScreen
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -181,85 +191,78 @@ fun WalletScreen(
 
         Spacer(Modifier.height(12.dp))
 
-        // balance card
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = Color.Transparent,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Brush.linearGradient(colors = listOf(colors.primary, colors.secondary)))
-                    .padding(20.dp),
-            ) {
-                Column {
-                    Text("Your balance", fontSize = 11.sp, color = Color.Black.copy(alpha = 0.7f), fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(6.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "$credits", fontSize = 38.sp, fontWeight = FontWeight.Black,
-                            color = Color.Black, fontFamily = FontFamily.Monospace,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Column {
-                            Text("credits", fontSize = 12.sp, color = Color.Black.copy(alpha = 0.7f))
-                            Spacer(Modifier.height(4.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("🪙", fontSize = 12.sp)
-                                Spacer(Modifier.width(4.dp))
-                                Text("$coins coins", fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Premium balance card
+        BalanceCard(
+            credits = credits,
+            coins = coins,
+            modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 0),
+        )
 
         Spacer(Modifier.height(16.dp))
 
-        // action row
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ActionButton(Icons.Default.ShoppingCart, "Buy", {
+        // Action chips
+        Row(
+            modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 80),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ActionButton(Icons.Default.ShoppingCart, SanjiEmoji.CREDITS, "Buy", {
                 if (packs.isNotEmpty()) buyTarget = BuyTarget.Credits(packs.first())
                 else error = "No packs available"
             }, Modifier.weight(1f))
-            ActionButton(Icons.Default.CheckCircle, "Redeem", { showRedeem = true }, Modifier.weight(1f))
-            ActionButton(Icons.Default.MonetizationOn, if (dailyBonusRemaining > 0) "Bonus\n${fmtDur(dailyBonusRemaining)}" else "Bonus", {
-                scope.launch {
-                    val amount = userData.tryClaimDailyBonus(uid)
-                    if (amount != null && amount > 0) {
-                        success = "+$amount credits claimed!"
-                        dailyBonusRemaining = userData.getDailyBonusRemaining(uid)
-                    } else {
-                        error = "Not ready — come back later"
+            ActionButton(Icons.Default.CheckCircle, SanjiEmoji.STAR, "Redeem", { showRedeem = true }, Modifier.weight(1f))
+            ActionButton(
+                Icons.Default.MonetizationOn,
+                SanjiEmoji.GIFT,
+                if (dailyBonusRemaining > 0) "Bonus\n${fmtDur(dailyBonusRemaining)}" else "Bonus",
+                {
+                    scope.launch {
+                        val amount = userData.tryClaimDailyBonus(uid)
+                        if (amount != null && amount > 0) {
+                            success = "+$amount credits claimed!"
+                            dailyBonusRemaining = userData.getDailyBonusRemaining(uid)
+                        } else {
+                            error = "Not ready — come back later"
+                        }
                     }
-                }
-            }, Modifier.weight(1f))
+                },
+                Modifier.weight(1f),
+            )
         }
 
-        // transfer / gift row
         if (onOpenTransfer != null || onOpenGift != null) {
             Spacer(Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 140),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 if (onOpenTransfer != null) {
-                    ActionButton(Icons.Default.SwapHoriz, "Transfer", { onOpenTransfer() }, Modifier.weight(1f))
+                    ActionButton(Icons.Default.SwapHoriz, SanjiEmoji.TRANSFER, "Transfer", { onOpenTransfer() }, Modifier.weight(1f))
                 }
                 if (onOpenGift != null) {
-                    ActionButton(Icons.Default.CardGiftcard, "Gift", { onOpenGift() }, Modifier.weight(1f))
+                    ActionButton(Icons.Default.CardGiftcard, SanjiEmoji.GIFT, "Gift", { onOpenGift() }, Modifier.weight(1f))
                 }
             }
         }
 
         if (subPlan != "free" && subExpiresAt > System.currentTimeMillis() / 1000L) {
             Spacer(Modifier.height(16.dp))
-            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = colors.primary.copy(alpha = 0.10f),
+                modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 180),
+            ) {
                 Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.WorkspacePremium, null, tint = colors.primary)
+                    Text(SanjiEmoji.PREMIUM, fontSize = 18.sp)
                     Spacer(Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("${subPlan.uppercase()} active", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
-                        Text("Expires: ${fmtShort(subExpiresAt)}", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                        Text(
+                            "${subPlan.uppercase()} active",
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
+                        )
+                        Text(
+                            "Expires: ${fmtShort(subExpiresAt)}",
+                            fontSize = 11.sp, color = colors.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -275,17 +278,22 @@ fun WalletScreen(
         }
 
         if (packs.isNotEmpty()) {
-            Text("Buy Credits", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+            Text(
+                "${SanjiEmoji.CREDITS} Buy Credits",
+                fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
+                modifier = Modifier.fadeSlideIn(delayMs = 220),
+            )
             Spacer(Modifier.height(8.dp))
-            packs.forEach { pack ->
+            packs.forEachIndexed { idx, pack ->
                 Surface(
                     onClick = { buyTarget = BuyTarget.Credits(pack) },
                     shape = RoundedCornerShape(14.dp),
                     color = colors.surface,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).pressScale()
+                        .fadeSlideIn(delayMs = 240 + idx * 40),
                 ) {
                     Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("💰", fontSize = 22.sp)
+                        Text(SanjiEmoji.CREDITS, fontSize = 22.sp)
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(pack.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
@@ -299,21 +307,29 @@ fun WalletScreen(
         }
 
         if (plans.isNotEmpty()) {
-            Text("Upgrade Subscription", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+            Text(
+                "${SanjiEmoji.PREMIUM} Upgrade Subscription",
+                fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
+                modifier = Modifier.fadeSlideIn(delayMs = 300),
+            )
             Spacer(Modifier.height(8.dp))
-            plans.forEach { plan ->
+            plans.forEachIndexed { idx, plan ->
                 Surface(
                     onClick = { buyTarget = BuyTarget.Subscription(plan) },
                     shape = RoundedCornerShape(14.dp),
                     color = colors.surface,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).pressScale()
+                        .fadeSlideIn(delayMs = 320 + idx * 40),
                 ) {
                     Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.WorkspacePremium, null, tint = colors.primary, modifier = Modifier.size(26.dp))
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(plan.name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
-                            Text("${plan.durationDays} days · ${plan.dailyLimit} SMS/day", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                            Text(
+                                "${plan.durationDays} days · ${plan.dailyLimit} SMS/day",
+                                fontSize = 11.sp, color = colors.onSurfaceVariant,
+                            )
                         }
                         Text("₹${plan.priceInr}", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = colors.primary)
                     }
@@ -323,17 +339,29 @@ fun WalletScreen(
         }
 
         if (txs.isNotEmpty()) {
-            Text("Recent Transactions", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+            Text(
+                "${SanjiEmoji.RECEIPT} Recent Transactions",
+                fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
+                modifier = Modifier.fadeSlideIn(delayMs = 380),
+            )
             Spacer(Modifier.height(8.dp))
             txs.forEach { t ->
                 val isCoin = t.type.contains("coin", true)
                 val positive = t.delta >= 0
-                Surface(shape = RoundedCornerShape(12.dp), color = colors.surface, modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = colors.surface,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                ) {
                     Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (isCoin) "🪙" else "💰", fontSize = 16.sp)
+                        Text(if (isCoin) SanjiEmoji.COINS else SanjiEmoji.CREDITS, fontSize = 16.sp)
                         Spacer(Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(humanType(t.type), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+                            Text(
+                                humanType(t.type),
+                                fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                color = colors.onBackground,
+                            )
                             Text(t.reason.ifBlank { "—" }, fontSize = 10.sp, color = colors.onSurfaceVariant)
                             Text(fmtShort(t.ts), fontSize = 10.sp, color = colors.onSurfaceVariant)
                         }
@@ -390,15 +418,87 @@ private sealed class BuyTarget {
 }
 
 @Composable
+private fun BalanceCard(
+    credits: Int,
+    coins: Int,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalSanjiColors.current
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = Color.Transparent,
+        modifier = modifier,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Brush.linearGradient(listOf(colors.primary, colors.secondary)))
+                .padding(20.dp),
+        ) {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(SanjiEmoji.WALLET, fontSize = 16.sp)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "YOUR BALANCE",
+                        fontSize = 10.sp,
+                        color = Color.Black.copy(alpha = 0.75f),
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 2.sp,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.Bottom) {
+                    AnimatedCounter(
+                        value = credits,
+                        style = androidx.compose.ui.text.TextStyle(fontSize = 40.sp),
+                        color = Color.Black,
+                        fontWeight = FontWeight.Black,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "credits",
+                        fontSize = 12.sp,
+                        color = Color.Black.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = Color.Black.copy(alpha = 0.15f),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(SanjiEmoji.COINS, fontSize = 12.sp)
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "$coins coins",
+                            fontSize = 12.sp,
+                            color = Color.Black,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ActionButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
+    emoji: String,
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalSanjiColors.current
+    val scale = remember { Animatable(1f) }
     Surface(
-        modifier = modifier,
+        modifier = modifier.pressScale(),
         onClick = onClick,
         shape = RoundedCornerShape(14.dp),
         color = colors.surface,
@@ -407,9 +507,23 @@ private fun ActionButton(
             modifier = Modifier.padding(vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Icon(icon, null, tint = colors.primary, modifier = Modifier.size(22.dp))
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(colors.primary.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, null, tint = colors.primary, modifier = Modifier.size(18.dp))
+            }
             Spacer(Modifier.height(6.dp))
-            Text(label, fontSize = 11.sp, color = colors.onBackground, textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold)
+            Text(
+                label,
+                fontSize = 11.sp,
+                color = colors.onBackground,
+                textAlign = TextAlign.Center,
+                fontWeight = FontWeight.SemiBold,
+            )
         }
     }
 }
@@ -433,7 +547,13 @@ private fun RedeemDialog(
         ) {
             Column(Modifier.padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Redeem Code", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = colors.onBackground, modifier = Modifier.weight(1f))
+                    Text(SanjiEmoji.STAR, fontSize = 18.sp)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Redeem Code",
+                        fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                        color = colors.onBackground, modifier = Modifier.weight(1f),
+                    )
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, "Close", tint = colors.onSurfaceVariant)
                     }
@@ -451,7 +571,7 @@ private fun RedeemDialog(
                 Button(
                     onClick = { if (code.isNotBlank()) onRedeem(code) },
                     enabled = code.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    modifier = Modifier.fillMaxWidth().height(48.dp).pressScale(),
                     colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
                 ) { Text("Redeem", fontWeight = FontWeight.Bold) }
             }
