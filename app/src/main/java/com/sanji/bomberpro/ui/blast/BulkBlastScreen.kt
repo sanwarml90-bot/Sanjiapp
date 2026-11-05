@@ -65,6 +65,10 @@ import com.sanji.bomberpro.services.BulkCostEstimate
 import com.sanji.bomberpro.services.ContactsService
 import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.AnimatedCounter
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -156,7 +160,10 @@ fun BulkBlastScreen(
             Spacer(Modifier.weight(1f))
             Surface(shape = RoundedCornerShape(20.dp), color = colors.primary.copy(alpha = 0.15f)) {
                 Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                    Text("💰 $liveCredits", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+                    Text(
+                        "${SanjiEmoji.CREDITS} $liveCredits",
+                        fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.primary,
+                    )
                 }
             }
         }
@@ -331,7 +338,10 @@ private fun PremiumCheckStep(isPremium: Boolean, isAdmin: Boolean, onContinue: (
         if (isPremium) {
             Icon(Icons.Default.CheckCircle, null, tint = colors.success, modifier = Modifier.size(64.dp))
             Spacer(Modifier.height(16.dp))
-            Text("Bulk Blast Mode", fontSize = 22.sp, fontWeight = FontWeight.Black, color = colors.onBackground)
+            Text(
+                "${SanjiEmoji.BLAST} Bulk Blast Mode",
+                fontSize = 22.sp, fontWeight = FontWeight.Black, color = colors.onBackground,
+            )
             Spacer(Modifier.height(8.dp))
             Text(
                 if (isAdmin) "Admin access — unlimited" else "Premium unlocked",
@@ -342,23 +352,26 @@ private fun PremiumCheckStep(isPremium: Boolean, isAdmin: Boolean, onContinue: (
                 Column(Modifier.padding(16.dp)) {
                     Text("Send SMS to multiple numbers at once:", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
                     Spacer(Modifier.height(8.dp))
-                    BulletLine("📋 Paste or add numbers manually")
-                    BulletLine("📞 Import from phone contacts")
-                    BulletLine("💰 Each number costs credits")
-                    BulletLine("♻️ Failed sends refunded")
+                    BulletLine("${SanjiEmoji.COPY} Paste or add numbers manually")
+                    BulletLine("${SanjiEmoji.PHONE} Import from phone contacts")
+                    BulletLine("${SanjiEmoji.CREDITS} Each number costs credits")
+                    BulletLine("${SanjiEmoji.REFRESH} Failed sends refunded")
                 }
             }
             Spacer(Modifier.height(24.dp))
             Button(
                 onClick = onContinue,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
             ) { Text("Continue", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
         } else {
             Icon(Icons.Default.Lock, null, tint = colors.onSurfaceVariant, modifier = Modifier.size(64.dp))
             Spacer(Modifier.height(16.dp))
-            Text("Premium Feature", fontSize = 22.sp, fontWeight = FontWeight.Black, color = colors.onBackground)
+            Text(
+                "${SanjiEmoji.LOCK} Premium Feature",
+                fontSize = 22.sp, fontWeight = FontWeight.Black, color = colors.onBackground,
+            )
             Spacer(Modifier.height(8.dp))
             Text("Bulk Blast is available for premium users only.", fontSize = 13.sp, color = colors.onSurfaceVariant, textAlign = TextAlign.Center)
             Spacer(Modifier.height(20.dp))
@@ -392,7 +405,10 @@ private fun NumbersStep(
 ) {
     val colors = LocalSanjiColors.current
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text("Step 1 / 3 — Numbers", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+        Text(
+            "Step 1 / 3 — Numbers",
+            fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
+        )
         Spacer(Modifier.height(4.dp))
         Text("Add numbers manually or import from contacts", fontSize = 12.sp, color = colors.onSurfaceVariant)
         Spacer(Modifier.height(16.dp))
@@ -409,7 +425,7 @@ private fun NumbersStep(
             Button(
                 onClick = onAddManual,
                 enabled = manualInput.isNotBlank(),
-                modifier = Modifier.height(56.dp),
+                modifier = Modifier.height(56.dp).pressScale(),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
             ) { Text("Add", fontWeight = FontWeight.Bold) }
@@ -422,7 +438,7 @@ private fun NumbersStep(
                 onClick = onPickContacts,
                 shape = RoundedCornerShape(12.dp),
                 color = colors.surface,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).pressScale(),
                 enabled = !loading,
             ) {
                 Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
@@ -439,6 +455,7 @@ private fun NumbersStep(
                     onClick = onClearAll,
                     shape = RoundedCornerShape(12.dp),
                     color = colors.error.copy(alpha = 0.15f),
+                    modifier = Modifier.pressScale(),
                 ) {
                     Row(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Delete, null, tint = colors.error, modifier = Modifier.size(16.dp))
@@ -450,7 +467,10 @@ private fun NumbersStep(
         }
 
         Spacer(Modifier.height(16.dp))
-        Text("📋 ${numbers.size} number${if (numbers.size == 1) "" else "s"} in list", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.primary)
+        Text(
+            "${SanjiEmoji.COPY} ${numbers.size} number${if (numbers.size == 1) "" else "s"} in list",
+            fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.primary,
+        )
         Spacer(Modifier.height(8.dp))
 
         Surface(shape = RoundedCornerShape(12.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
@@ -476,7 +496,7 @@ private fun NumbersStep(
         Button(
             onClick = onNext,
             enabled = numbers.size >= FirebaseConfig.BULK_MIN_NUMBERS,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
+            modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
             shape = RoundedCornerShape(14.dp),
             colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
         ) { Text("Next →", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
@@ -487,7 +507,10 @@ private fun NumbersStep(
 private fun MessageStep(message: String, onChange: (String) -> Unit, onNext: () -> Unit, onBack: () -> Unit) {
     val colors = LocalSanjiColors.current
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text("Step 2 / 3 — Message", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+        Text(
+            "Step 2 / 3 — Message",
+            fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
+        )
         Spacer(Modifier.height(4.dp))
         Text("Message sent to all numbers", fontSize = 12.sp, color = colors.onSurfaceVariant)
         Spacer(Modifier.height(20.dp))
@@ -504,7 +527,7 @@ private fun MessageStep(message: String, onChange: (String) -> Unit, onNext: () 
         Button(
             onClick = onNext,
             enabled = message.isNotBlank(),
-            modifier = Modifier.fillMaxWidth().height(52.dp),
+            modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
             shape = RoundedCornerShape(14.dp),
             colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
         ) { Text("Next →", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
@@ -531,7 +554,10 @@ private fun ConfigStep(
 ) {
     val colors = LocalSanjiColors.current
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text("Step 3 / 3 — Config", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+        Text(
+            "Step 3 / 3 — Config",
+            fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
+        )
         Spacer(Modifier.height(4.dp))
         Text("$numbersCount numbers in list", fontSize = 12.sp, color = colors.onSurfaceVariant)
         Spacer(Modifier.height(16.dp))
@@ -556,19 +582,22 @@ private fun ConfigStep(
                     onClick = { onSpeedChange(s) },
                     shape = RoundedCornerShape(10.dp),
                     color = if (speed == s) colors.primary.copy(alpha = 0.15f) else colors.surface,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).pressScale(),
                 ) {
                     Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(s.label, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (speed == s) colors.primary else colors.onBackground)
+                        Text(
+                            s.label,
+                            fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                            color = if (speed == s) colors.primary else colors.onBackground,
+                        )
                     }
                 }
             }
         }
 
-        // power selector — admin only
         if (isAdmin) {
             Spacer(Modifier.height(16.dp))
-            Text("Power mode (admin only)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+            Text("Power mode (admin only — sends extra, no extra cost to user)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 FirebaseConfig.ALLOWED_POWER_MODES.forEach { mode ->
@@ -576,10 +605,14 @@ private fun ConfigStep(
                         onClick = { onPowerChange(mode) },
                         shape = RoundedCornerShape(10.dp),
                         color = if (power == mode) colors.primary.copy(alpha = 0.15f) else colors.surface,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).pressScale(),
                     ) {
                         Column(modifier = Modifier.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("${mode}x", fontSize = 14.sp, fontWeight = FontWeight.Black, color = if (power == mode) colors.primary else colors.onBackground)
+                            Text(
+                                "${mode}x",
+                                fontSize = 14.sp, fontWeight = FontWeight.Black,
+                                color = if (power == mode) colors.primary else colors.onBackground,
+                            )
                         }
                     }
                 }
@@ -591,18 +624,22 @@ private fun ConfigStep(
         Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp)) {
                 if (estimate != null) {
-                    Text("📊 Cost estimate", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+                    Text(
+                        "${SanjiEmoji.TOTAL} Cost estimate",
+                        fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.primary,
+                    )
                     Spacer(Modifier.height(8.dp))
                     EstRow("Numbers", "${estimate.numbersCount}")
                     EstRow("Per number", "${estimate.perNumberCount}")
-                    if (isAdmin) EstRow("Power", "${estimate.power}x")
-                    EstRow("Total SMS", "${estimate.totalSms}")
+                    if (isAdmin) EstRow("Power", "${estimate.power}x (free boost)")
+                    EstRow("Send attempts", "${estimate.totalSmsAttempts}")
+                    EstRow("Billable SMS (base)", "${estimate.totalBaseSms}")
                     EstRow("Total credits", "${estimate.totalCredits}")
                     EstRow("Your credits", "$credits", highlight = !isAdmin && !estimate.affordable)
                     if (!isAdmin && !estimate.affordable) {
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "❌ Not affordable — max ${estimate.maxAffordable} numbers with current credits",
+                            "${SanjiEmoji.ERROR} Not affordable — max ${estimate.maxAffordableNumbers} numbers with current credits",
                             fontSize = 11.sp, color = colors.error,
                         )
                     }
@@ -620,10 +657,10 @@ private fun ConfigStep(
         Button(
             onClick = onStart,
             enabled = estimate != null && (isAdmin || estimate.affordable),
-            modifier = Modifier.fillMaxWidth().height(52.dp),
+            modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
             shape = RoundedCornerShape(14.dp),
             colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
-        ) { Text("START BULK BLAST 🚀", fontWeight = FontWeight.Black, fontSize = 15.sp) }
+        ) { Text("START BULK BLAST ${SanjiEmoji.ROCKET}", fontWeight = FontWeight.Black, fontSize = 15.sp) }
         Spacer(Modifier.height(8.dp))
         TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("← Back", color = colors.onSurfaceVariant) }
     }
@@ -644,26 +681,44 @@ private fun ExecuteStep(progressIndex: Int, totalNumbers: Int, sent: Int, failed
     val progress = if (totalNumbers > 0) progressIndex.toFloat() / totalNumbers else 0f
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(20.dp))
-        Text("BULK BLASTING…", fontSize = 20.sp, fontWeight = FontWeight.Black, color = colors.primary)
+        Text(
+            "BULK BLASTING…",
+            fontSize = 20.sp, fontWeight = FontWeight.Black, color = colors.primary,
+        )
         Spacer(Modifier.height(20.dp))
-        LinearProgressIndicator(progress = { progress }, color = colors.primary, trackColor = colors.surface, modifier = Modifier.fillMaxWidth().height(10.dp))
+        LinearProgressIndicator(
+            progress = { progress }, color = colors.primary, trackColor = colors.surface,
+            modifier = Modifier.fillMaxWidth().height(10.dp),
+        )
         Spacer(Modifier.height(8.dp))
         Text("Number $progressIndex of $totalNumbers", fontSize = 12.sp, color = colors.onSurfaceVariant)
         Spacer(Modifier.height(20.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("$sent", fontSize = 24.sp, fontWeight = FontWeight.Black, color = colors.success)
+                Text(SanjiEmoji.SUCCESS, fontSize = 14.sp)
+                AnimatedCounter(
+                    value = sent,
+                    style = androidx.compose.ui.text.TextStyle(fontSize = 24.sp),
+                    color = colors.success,
+                    fontWeight = FontWeight.Black,
+                )
                 Text("SENT", fontSize = 11.sp, color = colors.onSurfaceVariant)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("$failed", fontSize = 24.sp, fontWeight = FontWeight.Black, color = colors.error)
+                Text(SanjiEmoji.ERROR, fontSize = 14.sp)
+                AnimatedCounter(
+                    value = failed,
+                    style = androidx.compose.ui.text.TextStyle(fontSize = 24.sp),
+                    color = colors.error,
+                    fontWeight = FontWeight.Black,
+                )
                 Text("FAILED", fontSize = 11.sp, color = colors.onSurfaceVariant)
             }
         }
         Spacer(Modifier.height(40.dp))
         Button(
             onClick = onStop,
-            modifier = Modifier.fillMaxWidth().height(56.dp),
+            modifier = Modifier.fillMaxWidth().height(56.dp).pressScale(),
             shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.buttonColors(containerColor = colors.error, contentColor = Color.White),
         ) { Text("STOP", fontWeight = FontWeight.Black) }
@@ -698,16 +753,25 @@ private fun ResultStep(summary: BulkBlastSummary?, isAdmin: Boolean, onDone: () 
                 EstRow("Total sent", "${summary?.totalSent ?: 0}")
                 EstRow("Total failed", "${summary?.totalFailed ?: 0}")
                 EstRow("Duration", "${summary?.durationSec ?: 0}s")
+                if (!isAdmin) {
+                    EstRow("Charged", "${summary?.totalCharged ?: 0} credits")
+                    if ((summary?.totalRefunded ?: 0) > 0) {
+                        EstRow("Refunded (unsent)", "${summary?.totalRefunded} credits")
+                    }
+                }
                 if (summary?.cancelled == true) {
                     Spacer(Modifier.height(4.dp))
-                    Text("⚠️ Cancelled early", fontSize = 11.sp, color = colors.warning)
+                    Text(
+                        "${SanjiEmoji.WARNING} Cancelled early",
+                        fontSize = 11.sp, color = colors.warning,
+                    )
                 }
             }
         }
         Spacer(Modifier.height(24.dp))
         Button(
             onClick = onDone,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
+            modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
             shape = RoundedCornerShape(14.dp),
             colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
         ) { Text("Done", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
