@@ -148,4 +148,254 @@ fun FirebaseHealthScreen(
                                 tested = idx
                                 totalToTest = total
                             }
-                            results
+                            results = found
+                        } catch (e: Exception) {
+                            error = "Test failed: ${e.message}"
+                        } finally {
+                            testing = false
+                        }
+                    }
+                },
+                enabled = !testing && !killing && firebases.isNotEmpty(),
+                modifier = Modifier.weight(1f).height(46.dp).pressScale(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.primary,
+                    contentColor = Color.Black,
+                ),
+            ) {
+                if (testing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.Black,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Testing…", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                } else {
+                    Text("${SanjiEmoji.SEARCH} Test All", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Button(
+                onClick = { showKillConfirm = true },
+                enabled = !testing && !killing && deadIds.isNotEmpty(),
+                modifier = Modifier.weight(1f).height(46.dp).pressScale(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.error,
+                    contentColor = Color.White,
+                    disabledContainerColor = colors.surface,
+                    disabledContentColor = colors.onSurfaceVariant,
+                ),
+            ) {
+                Text(
+                    "${SanjiEmoji.DELETE} Kill Dead (${deadIds.size})",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+
+        if (testing && totalToTest > 0) {
+            Spacer(Modifier.height(10.dp))
+            LinearProgressIndicator(
+                progress = { tested.toFloat() / totalToTest.coerceAtLeast(1) },
+                color = colors.primary,
+                trackColor = colors.surface,
+                modifier = Modifier.fillMaxWidth().height(6.dp),
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "$tested / $totalToTest",
+                fontSize = 11.sp,
+                color = colors.onSurfaceVariant,
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        if (loading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = colors.primary)
+            }
+            return
+        }
+
+        if (firebases.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(SanjiEmoji.FIREBASE, fontSize = 42.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("No firebases added yet", fontSize = 13.sp, color = colors.onSurfaceVariant)
+                }
+            }
+            return
+        }
+
+        if (results.isEmpty() && !testing) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(SanjiEmoji.NETWORK, fontSize = 42.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Tap Test All to check ${firebases.size} firebases",
+                        fontSize = 12.sp,
+                        color = colors.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            return
+        }
+
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(results) { r ->
+                ResultCard(result = r, isDead = r.firebaseId in deadIds)
+            }
+        }
+
+        if (error != null) {
+            Spacer(Modifier.height(10.dp))
+            Text(error!!, color = colors.error, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        }
+        if (success != null) {
+            Spacer(Modifier.height(10.dp))
+            Text(success!!, color = colors.success, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        }
+    }
+
+    if (showKillConfirm) {
+        AlertDialog(
+            onDismissRequest = { if (!killing) showKillConfirm = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        killing = true
+                        showKillConfirm = false
+                        scope.launch {
+                            try {
+                                val deleted = adminService.deleteFirebases(deadIds, adminUid)
+                                success = "Deleted $deleted dead firebase(s)"
+                                rtdb.invalidateScanCache()
+                                loadList()
+                                results = emptyList()
+                                onFirebasesDeleted()
+                            } catch (e: Exception) {
+                                error = "Delete failed: ${e.message}"
+                            } finally {
+                                killing = false
+                            }
+                        }
+                    },
+                    enabled = !killing,
+                ) {
+                    Text("Kill ${deadIds.size}", color = colors.error, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showKillConfirm = false }, enabled = !killing) {
+                    Text("Cancel", color = colors.onSurfaceVariant)
+                }
+            },
+            containerColor = colors.surface,
+            titleContentColor = colors.onBackground,
+            textContentColor = colors.onBackground,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(SanjiEmoji.WARNING, fontSize = 18.sp)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Kill Dead Firebases?")
+                }
+            },
+            text = {
+                Column {
+                    Text(
+                        "This will permanently delete ${deadIds.size} firebase(s) — those with 0 online clients or any error.",
+                        fontSize = 12.sp,
+                        color = colors.onBackground,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Action cannot be undone. Online devices on surviving firebases are unaffected.",
+                        fontSize = 11.sp,
+                        color = colors.error,
+                    )
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ResultCard(result: FirebaseTestResult, isDead: Boolean) {
+    val colors = LocalSanjiColors.current
+    val isHealthy = result.error == null && result.onlineClients > 0
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = colors.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (isHealthy) SanjiEmoji.SUCCESS else SanjiEmoji.ERROR,
+                    fontSize = 14.sp,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    result.firebaseLabel,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.onBackground,
+                    modifier = Modifier.weight(1f),
+                )
+                if (isDead) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = colors.error.copy(alpha = 0.15f),
+                    ) {
+                        Text(
+                            "DEAD",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colors.error,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                result.firebaseUrl.take(60),
+                fontSize = 10.sp,
+                color = colors.onSurfaceVariant,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "${SanjiEmoji.USERS} ${result.totalClients} total",
+                    fontSize = 11.sp,
+                    color = colors.onSurfaceVariant,
+                )
+                Text(
+                    "${SanjiEmoji.NETWORK} ${result.onlineClients} online",
+                    fontSize = 11.sp,
+                    color = if (result.onlineClients > 0) colors.success else colors.error,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (result.error != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    result.error,
+                    fontSize = 11.sp,
+                    color = colors.error,
+                )
+            }
+        }
+    }
+}
