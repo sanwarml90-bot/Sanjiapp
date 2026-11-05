@@ -8,6 +8,8 @@ import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sanji.bomberpro.FirebaseConfig
+import com.sanji.bomberpro.services.DeviceLockService
+import com.sanji.bomberpro.services.UserDataService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,6 +23,8 @@ class AuthManager(private val context: Context) {
 
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance()
+    private val deviceLockService = DeviceLockService(context)
+    private val userData = UserDataService()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _authState = MutableStateFlow<AuthState>(AuthState.Initializing)
@@ -106,7 +110,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  EMAIL — SIGN UP (unique username, best-effort)
+    //  EMAIL — SIGN UP
     // ============================================================
     suspend fun signUpWithEmail(
         email: String,
@@ -121,13 +125,11 @@ class AuthManager(private val context: Context) {
             return Result.failure(Exception("Username: letters, numbers, _ only"))
         if (password.length < 6) return Result.failure(Exception("Password min 6 chars"))
 
-        // 1. Create auth user FIRST (so subsequent Firestore query is authenticated)
         return try {
             val result = auth.createUserWithEmailAndPassword(cleanEmail, password).await()
             val user = result.user
                 ?: return Result.failure(Exception("No user returned"))
 
-            // 2. Now authenticated — check username uniqueness (best-effort)
             var duplicate = false
             try {
                 val existingSnap = db.collection(FirebaseConfig.COL_USERS)
@@ -135,17 +137,14 @@ class AuthManager(private val context: Context) {
                     .limit(1).get().await()
                 if (!existingSnap.isEmpty) duplicate = true
             } catch (e: Exception) {
-                // Rules/network blocked query — proceed anyway. Duplicate risk is accepted pre-launch.
-                Log.w(TAG, "uniqueness check failed, proceeding with best effort", e)
+                Log.w(TAG, "uniqueness check failed", e)
             }
 
             if (duplicate) {
-                // Roll back auth user
                 try { user.delete().await() } catch (_: Exception) {}
                 return Result.failure(Exception("Username already taken"))
             }
 
-            // 3. Set display name
             try {
                 val profileUpdates = UserProfileChangeRequest.Builder()
                     .setDisplayName(cleanUsername)
@@ -153,7 +152,6 @@ class AuthManager(private val context: Context) {
                 user.updateProfile(profileUpdates).await()
             } catch (_: Exception) {}
 
-            // 4. Create user doc
             ensureUserDoc(user, username = cleanUsername)
             loadProfileAndRole(user)
             Result.success(user)
@@ -275,6 +273,7 @@ class AuthManager(private val context: Context) {
                         "premium" to false,
                         "createdAt" to nowSec(),
                         "lastActive" to nowSec(),
+                        "specialMsgVersionSeen" to 0,
                     )
                 ).await()
 
@@ -322,7 +321,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  LOAD PROFILE + ROLE + GATE INFO
+    //  LOAD PROFILE + ROLE + DEVICE LOCK
     // ============================================================
     private suspend fun loadProfileAndRole(user: FirebaseUser) {
         try {
@@ -354,6 +353,8 @@ class AuthManager(private val context: Context) {
                 if (profileDoc.exists()) {
                     @Suppress("UNCHECKED_CAST")
                     val sub = profileDoc.get("subscription") as? Map<String, Any?> ?: emptyMap()
+                    @Suppress("UNCHECKED_CAST")
+                    val dev = profileDoc.get("deviceInfo") as? Map<String, Any?> ?: emptyMap()
                     val dn = profileDoc.getString("displayName")
                         ?: user.displayName
                         ?: (user.email?.substringBefore("@") ?: "User")
@@ -365,8 +366,8 @@ class AuthManager(private val context: Context) {
                         username = un,
                         photoUrl = profileDoc.getString("photoUrl"),
                         role = profileDoc.getString("role") ?: "user",
-                        credits = (profileDoc.getLong("credits") ?: 0L).toInt(),
-                        coins = (profileDoc.getLong("coins") ?: 0L).toInt(),
+                        credits = (profileDoc.getLong("credits") ?: 0L).toInt().coerceAtLeast(0),
+                        coins = (profileDoc.getLong("coins") ?: 0L).toInt().coerceAtLeast(0),
                         manualAddedCredits = (profileDoc.getLong("manualAddedCredits") ?: 0L).toInt(),
                         manualAddedCoins = (profileDoc.getLong("manualAddedCoins") ?: 0L).toInt(),
                         subscriptionPlan = (sub["plan"] as? String) ?: "free",
@@ -384,6 +385,8 @@ class AuthManager(private val context: Context) {
                         premium = profileDoc.getBoolean("premium") ?: false,
                         createdAt = profileDoc.getLong("createdAt") ?: 0L,
                         lastActive = profileDoc.getLong("lastActive") ?: 0L,
+                        deviceFingerprint = (dev["fingerprint"] as? String) ?: "",
+                        specialMsgVersionSeen = (profileDoc.getLong("specialMsgVersionSeen") ?: 0L).toInt(),
                     )
 
                     if (!profileDoc.contains("usernameLower") && un.isNotBlank()) {
@@ -424,6 +427,34 @@ class AuthManager(private val context: Context) {
                 Log.w(TAG, "Profile load failed", e)
             }
 
+            // ---- DEVICE LOCK ENFORCEMENT ----
+            // Only fires for USER role. Admin+ are exempt (handled inside service).
+            try {
+                val fingerprint = deviceLockService.getDeviceFingerprint()
+                val lockResult = deviceLockService.registerDevice(
+                    uid = user.uid,
+                    email = email,
+                    userName = profile?.displayName ?: (user.displayName ?: "User"),
+                    role = role,
+                    fingerprintOverride = fingerprint,
+                )
+                if (lockResult.isFailure) {
+                    val errMsg = lockResult.exceptionOrNull()?.message ?: ""
+                    if (errMsg.startsWith("DEVICE_LOCKED:")) {
+                        val lockedUid = errMsg.removePrefix("DEVICE_LOCKED:").trim()
+                        // Sign this user out — they can't use this device for another account
+                        try { auth.signOut() } catch (_: Exception) {}
+                        _authState.value = AuthState.DeviceLocked(
+                            lockedUid = lockedUid,
+                            message = "This device is already registered to another account. Sign in with that account, or contact admin.",
+                        )
+                        return
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Device lock check failed — proceeding", e)
+            }
+
             _authState.value = AuthState.LoggedIn(user, role, profile)
         } catch (e: Exception) {
             Log.e(TAG, "loadProfileAndRole crashed", e)
@@ -454,7 +485,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  USERNAME UPDATE (best-effort unique)
+    //  USERNAME UPDATE
     // ============================================================
     suspend fun updateUsername(newUsername: String): Result<Unit> {
         val user = auth.currentUser ?: return Result.failure(Exception("Not signed in"))
@@ -463,7 +494,6 @@ class AuthManager(private val context: Context) {
         if (!clean.matches(Regex("^[a-zA-Z0-9_]+$")))
             return Result.failure(Exception("Letters, numbers, _ only"))
 
-        // Best-effort uniqueness — proceed if query fails (rules/network)
         try {
             val existingSnap = db.collection(FirebaseConfig.COL_USERS)
                 .whereEqualTo("usernameLower", clean.lowercase())
@@ -493,6 +523,64 @@ class AuthManager(private val context: Context) {
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    // ============================================================
+    //  DELETE ACCOUNT (self)
+    // ============================================================
+    /**
+     * Full self-delete:
+     *  1. Release device lock for this uid
+     *  2. Snapshot + soft-delete user doc → deleted_accounts
+     *  3. Delete FirebaseAuth user
+     *
+     * Blast history, OTP history, transactions stay (queried by uid for admin).
+     */
+    suspend fun deleteOwnAccount(reason: String = "user-requested"): Result<Unit> {
+        val user = auth.currentUser
+            ?: return Result.failure(Exception("Not signed in"))
+        return try {
+            val uid = user.uid
+
+            // 1. Release device locks owned by this uid
+            try {
+                deviceLockService.releaseAllLocksForUid(uid)
+            } catch (_: Exception) {}
+
+            // 2. Soft delete (snapshot + delete user doc)
+            val softDeleted = userData.softDeleteUser(uid, deletedBy = uid, reason = reason)
+            if (!softDeleted) {
+                return Result.failure(Exception("Failed to archive account"))
+            }
+
+            // 3. Delete auth user
+            try {
+                user.delete().await()
+            } catch (e: Exception) {
+                // May require re-auth — surface message
+                return Result.failure(Exception("Auth delete requires re-sign-in: ${e.message}"))
+            }
+
+            _authState.value = AuthState.LoggedOut
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteOwnAccount failed", e)
+            Result.failure(e)
+        }
+    }
+
+    // ============================================================
+    //  SPECIAL MSG MARK
+    // ============================================================
+    suspend fun markSpecialMsgSeen(version: Int): Boolean {
+        val user = auth.currentUser ?: return false
+        return try {
+            db.collection(FirebaseConfig.COL_USERS).document(user.uid)
+                .update("specialMsgVersionSeen", version.toLong()).await()
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 
