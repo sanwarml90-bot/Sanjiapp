@@ -2,7 +2,6 @@ package com.sanji.bomberpro.services
 
 import android.util.Log
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
 import com.sanji.bomberpro.FirebaseConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
@@ -34,6 +33,18 @@ data class ScheduledRunResult(
     val error: String? = null,
 )
 
+/**
+ * Scheduled blasts.
+ *
+ * FIXED: All queries now use SINGLE-FIELD filters + CLIENT-SIDE filter/sort
+ * to avoid Firestore composite index requirements. Old code used
+ * whereEqualTo + whereLessThanOrEqualTo + orderBy on multiple fields,
+ * which silently returned empty without a deployed index.
+ *
+ * NOTE: SchedulerTicker runs only while app is open. For schedules to fire,
+ * the app must be foregrounded or recently backgrounded (process alive).
+ * For 24/7 reliability, keep the app open or use a bot.
+ */
 class SchedulerService {
 
     private val db = FirebaseFirestore.getInstance()
@@ -90,63 +101,69 @@ class SchedulerService {
     }
 
     // ============================================================
-    //  LIST — user's own
+    //  LIST — user's own schedules (client-side filter + sort)
     // ============================================================
     suspend fun listUserSchedules(uid: String, limit: Long = 50): List<ScheduledBlast> =
         withContext(Dispatchers.IO) {
             try {
                 db.collection(FirebaseConfig.COL_SCHEDULED)
                     .whereEqualTo("uid", uid)
-                    .whereIn("status", listOf("pending", "running"))
-                    .orderBy("scheduledAt", Query.Direction.ASCENDING)
-                    .limit(limit)
+                    .limit(200)
                     .get().await()
-                    .documents.mapNotNull { parse(it.id, it.data ?: emptyMap()) }
+                    .documents
+                    .mapNotNull { parse(it.id, it.data ?: emptyMap()) }
+                    .filter { it.status == "pending" || it.status == "running" }
+                    .sortedBy { it.scheduledAt }
+                    .take(limit.toInt())
             } catch (e: Exception) {
-                Log.w(TAG, "listUserSchedules failed", e)
+                Log.e(TAG, "listUserSchedules failed", e)
                 emptyList()
             }
         }
 
     // ============================================================
-    //  LIST — admin view of all pending
+    //  LIST — all pending (admin, client-side filter + sort)
     // ============================================================
     suspend fun listAllPendingSchedules(limit: Long = 200): List<ScheduledBlast> =
         withContext(Dispatchers.IO) {
             try {
                 db.collection(FirebaseConfig.COL_SCHEDULED)
                     .whereEqualTo("status", "pending")
-                    .orderBy("scheduledAt", Query.Direction.ASCENDING)
-                    .limit(limit)
+                    .limit(500)
                     .get().await()
-                    .documents.mapNotNull { parse(it.id, it.data ?: emptyMap()) }
+                    .documents
+                    .mapNotNull { parse(it.id, it.data ?: emptyMap()) }
+                    .sortedBy { it.scheduledAt }
+                    .take(limit.toInt())
             } catch (e: Exception) {
-                Log.w(TAG, "listAllPendingSchedules failed", e)
+                Log.e(TAG, "listAllPendingSchedules failed", e)
                 emptyList()
             }
         }
 
     // ============================================================
-    //  DUE — schedules whose time has come
+    //  DUE — schedules whose time has come (client-side filter)
     // ============================================================
     suspend fun getDueSchedules(): List<ScheduledBlast> = withContext(Dispatchers.IO) {
         try {
             val now = System.currentTimeMillis() / 1000L
             db.collection(FirebaseConfig.COL_SCHEDULED)
                 .whereEqualTo("status", "pending")
-                .whereLessThanOrEqualTo("scheduledAt", now)
-                .orderBy("scheduledAt", Query.Direction.ASCENDING)
-                .limit(20)
+                .limit(200)
                 .get().await()
-                .documents.mapNotNull { parse(it.id, it.data ?: emptyMap()) }
+                .documents
+                .mapNotNull { parse(it.id, it.data ?: emptyMap()) }
+                .filter { it.scheduledAt in 1..now }
+                .sortedBy { it.scheduledAt }
+                .take(20)
         } catch (e: Exception) {
-            Log.w(TAG, "getDueSchedules failed", e)
+            Log.e(TAG, "getDueSchedules failed", e)
             emptyList()
         }
     }
 
     // ============================================================
-    //  MARK RUNNING — lock the schedule
+    //  MARK RUNNING
     // ============================================================
     suspend fun markRunning(id: String): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -157,13 +174,13 @@ class SchedulerService {
                 ).await()
             true
         } catch (e: Exception) {
-            Log.w(TAG, "markRunning failed", e)
+            Log.e(TAG, "markRunning failed", e)
             false
         }
     }
 
     // ============================================================
-    //  COMPLETE — finished, no repeat
+    //  MARK COMPLETE
     // ============================================================
     suspend fun markComplete(id: String, result: ScheduledRunResult): Boolean =
         withContext(Dispatchers.IO) {
@@ -178,13 +195,13 @@ class SchedulerService {
                     ).await()
                 true
             } catch (e: Exception) {
-                Log.w(TAG, "markComplete failed", e)
+                Log.e(TAG, "markComplete failed", e)
                 false
             }
         }
 
     // ============================================================
-    //  RESCHEDULE — for repeat
+    //  RESCHEDULE (for repeat)
     // ============================================================
     suspend fun markRescheduled(id: String, nextAt: Long): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -198,7 +215,7 @@ class SchedulerService {
                 ).await()
             true
         } catch (e: Exception) {
-            Log.w(TAG, "markRescheduled failed", e)
+            Log.e(TAG, "markRescheduled failed", e)
             false
         }
     }
@@ -217,7 +234,7 @@ class SchedulerService {
                 ).await()
             true
         } catch (e: Exception) {
-            Log.w(TAG, "cancelSchedule failed", e)
+            Log.e(TAG, "cancelSchedule failed", e)
             false
         }
     }
