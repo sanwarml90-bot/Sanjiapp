@@ -1,5 +1,6 @@
 package com.sanji.bomberpro.services
 
+import android.util.Log
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.Dispatchers
@@ -23,13 +24,6 @@ data class Ticket(
     val replies: List<TicketReply> = emptyList(),
 )
 
-/**
- * Legacy support-appeal model.
- * NOTE: distinct from `AppealRecord` in AppealService.
- * This one is used by the Support ticket/ban-appeal flow.
- * Writes to `support_appeals` collection (NOT `appeals`).
- * The newer `appeals` collection is reserved for AppealService.
- */
 data class Appeal(
     val id: String = "",
     val uid: String = "",
@@ -39,15 +33,22 @@ data class Appeal(
     val ts: Long = 0L,
 )
 
+/**
+ * Support tickets.
+ *
+ * FIXED: All queries now use SINGLE-FIELD filters + CLIENT-SIDE sort
+ * to avoid requiring Firestore composite indexes. Old code used
+ * `whereEqualTo + orderBy` on different fields, which silently
+ * returned empty without a deployed index.
+ */
 class SupportService {
 
     private val db = FirebaseFirestore.getInstance()
     private val ticketsCol get() = db.collection("tickets")
-    // Separate collection — avoids schema collision with AppealService's `appeals`.
     private val appealsCol get() = db.collection("support_appeals")
 
     // ============================================================
-    //  TICKETS
+    //  SUBMIT
     // ============================================================
     suspend fun submitTicket(uid: String, userName: String, text: String): Result<String> =
         withContext(Dispatchers.IO) {
@@ -71,39 +72,67 @@ class SupportService {
                     )
                 ).await()
                 Result.success(ref.id)
-            } catch (e: Exception) { Result.failure(e) }
+            } catch (e: Exception) {
+                Log.e(TAG, "submitTicket failed", e)
+                Result.failure(e)
+            }
         }
 
+    // ============================================================
+    //  LIST MY TICKETS (user side) — client-side sort
+    // ============================================================
     suspend fun listMyTickets(uid: String, limit: Long = 50): List<Ticket> =
         withContext(Dispatchers.IO) {
             try {
                 ticketsCol
                     .whereEqualTo("uid", uid)
-                    .orderBy("ts", Query.Direction.DESCENDING)
-                    .limit(limit).get().await()
+                    .limit(200)
+                    .get().await()
                     .documents.mapNotNull { parseTicket(it.id, it.data ?: emptyMap()) }
-            } catch (_: Exception) { emptyList() }
+                    .sortedByDescending { it.ts }
+                    .take(limit.toInt())
+            } catch (e: Exception) {
+                Log.e(TAG, "listMyTickets failed", e)
+                emptyList()
+            }
         }
 
+    // ============================================================
+    //  LIST OPEN TICKETS (admin) — client-side sort
+    // ============================================================
     suspend fun listOpenTickets(limit: Long = 100): List<Ticket> =
         withContext(Dispatchers.IO) {
             try {
                 ticketsCol
                     .whereEqualTo("status", "open")
-                    .orderBy("lastUpdate", Query.Direction.DESCENDING)
-                    .limit(limit).get().await()
+                    .limit(300)
+                    .get().await()
                     .documents.mapNotNull { parseTicket(it.id, it.data ?: emptyMap()) }
-            } catch (_: Exception) { emptyList() }
+                    .sortedByDescending { it.lastUpdate }
+                    .take(limit.toInt())
+            } catch (e: Exception) {
+                Log.e(TAG, "listOpenTickets failed", e)
+                emptyList()
+            }
         }
 
+    // ============================================================
+    //  FIND ONE
+    // ============================================================
     suspend fun findTicket(id: String): Ticket? = withContext(Dispatchers.IO) {
         try {
             val snap = ticketsCol.document(id).get().await()
             if (!snap.exists()) return@withContext null
             parseTicket(snap.id, snap.data ?: emptyMap())
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            Log.e(TAG, "findTicket failed", e)
+            null
+        }
     }
 
+    // ============================================================
+    //  REPLY / CLOSE
+    // ============================================================
     suspend fun addTicketReply(ticketId: String, fromUid: String, text: String): Boolean =
         withContext(Dispatchers.IO) {
             try {
@@ -120,7 +149,10 @@ class SupportService {
                     "lastUpdate", now,
                 ).await()
                 true
-            } catch (_: Exception) { false }
+            } catch (e: Exception) {
+                Log.e(TAG, "addTicketReply failed", e)
+                false
+            }
         }
 
     suspend fun closeTicket(ticketId: String): Boolean = withContext(Dispatchers.IO) {
@@ -128,9 +160,15 @@ class SupportService {
             ticketsCol.document(ticketId)
                 .update("status", "closed").await()
             true
-        } catch (_: Exception) { false }
+        } catch (e: Exception) {
+            Log.e(TAG, "closeTicket failed", e)
+            false
+        }
     }
 
+    // ============================================================
+    //  PARSE
+    // ============================================================
     private fun parseTicket(id: String, map: Map<String, Any?>): Ticket? {
         if (map.isEmpty()) return null
         val repliesRaw = map["replies"] as? List<*> ?: emptyList<Any>()
@@ -155,7 +193,8 @@ class SupportService {
     }
 
     // ============================================================
-    //  APPEALS (support-style, distinct collection)
+    //  APPEALS (legacy support-style, kept for compat)
+    //  NOTE: active ban appeals use AppealService → `appeals` collection.
     // ============================================================
     suspend fun submitAppeal(uid: String, userName: String, text: String): Result<String> =
         withContext(Dispatchers.IO) {
@@ -164,7 +203,6 @@ class SupportService {
                 if (cleanText.isBlank()) {
                     return@withContext Result.failure(Exception("Message empty"))
                 }
-                // Check if already has open appeal
                 val existing = appealsCol
                     .whereEqualTo("uid", uid)
                     .whereEqualTo("status", "open")
@@ -185,28 +223,35 @@ class SupportService {
                     )
                 ).await()
                 Result.success(ref.id)
-            } catch (e: Exception) { Result.failure(e) }
+            } catch (e: Exception) {
+                Log.e(TAG, "submitAppeal failed", e)
+                Result.failure(e)
+            }
         }
 
     suspend fun listAppeals(onlyOpen: Boolean = true, limit: Long = 100): List<Appeal> =
         withContext(Dispatchers.IO) {
             try {
-                var q: Query = appealsCol
-                if (onlyOpen) q = q.whereEqualTo("status", "open")
-                q.orderBy("ts", Query.Direction.DESCENDING)
-                    .limit(limit).get().await()
-                    .documents.mapNotNull { d ->
-                        val map = d.data ?: return@mapNotNull null
-                        Appeal(
-                            id = d.id,
-                            uid = (map["uid"] ?: "").toString(),
-                            userName = map["userName"] as? String ?: "",
-                            text = map["text"] as? String ?: "",
-                            status = map["status"] as? String ?: "open",
-                            ts = (map["ts"] as? Number)?.toLong() ?: 0L,
-                        )
-                    }
-            } catch (_: Exception) { emptyList() }
+                val base = if (onlyOpen) {
+                    appealsCol.whereEqualTo("status", "open").limit(300).get().await()
+                } else {
+                    appealsCol.limit(300).get().await()
+                }
+                base.documents.mapNotNull { d ->
+                    val map = d.data ?: return@mapNotNull null
+                    Appeal(
+                        id = d.id,
+                        uid = (map["uid"] ?: "").toString(),
+                        userName = map["userName"] as? String ?: "",
+                        text = map["text"] as? String ?: "",
+                        status = map["status"] as? String ?: "open",
+                        ts = (map["ts"] as? Number)?.toLong() ?: 0L,
+                    )
+                }.sortedByDescending { it.ts }.take(limit.toInt())
+            } catch (e: Exception) {
+                Log.e(TAG, "listAppeals failed", e)
+                emptyList()
+            }
         }
 
     suspend fun resolveAppeal(appealId: String): Boolean = withContext(Dispatchers.IO) {
@@ -214,6 +259,13 @@ class SupportService {
             appealsCol.document(appealId)
                 .update("status", "resolved").await()
             true
-        } catch (_: Exception) { false }
+        } catch (e: Exception) {
+            Log.e(TAG, "resolveAppeal failed", e)
+            false
+        }
+    }
+
+    companion object {
+        private const val TAG = "SupportService"
     }
 }
