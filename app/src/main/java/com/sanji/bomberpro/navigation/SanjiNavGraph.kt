@@ -118,11 +118,11 @@ fun SanjiNavGraph(
     var permissionsGranted by remember { mutableStateOf(false) }
     var userForceJoinOk by remember { mutableStateOf(false) }
 
-    // Special msg
+    // Special msg — once per session (until owner disables)
     var specialMsgEnabled by remember { mutableStateOf(false) }
-    var specialMsgVersion by remember { mutableStateOf(0) }
     var pendingSpecialMsg by remember { mutableStateOf<SpecialMessage?>(null) }
     var needsSpecialMsg by remember { mutableStateOf(false) }
+    var specialMsgShownThisSession by remember { mutableStateOf(false) }
 
     var appLocked by remember { mutableStateOf(false) }
     var appLockMessage by remember { mutableStateOf("") }
@@ -148,6 +148,7 @@ fun SanjiNavGraph(
             gateLoaded = false
             needsSpecialMsg = false
             pendingSpecialMsg = null
+            specialMsgShownThisSession = false
             return@LaunchedEffect
         }
         gateLoaded = false
@@ -176,12 +177,10 @@ fun SanjiNavGraph(
             termsRequired = s.termsRequired
             forceJoinEnabled = s.forceJoinEnabled
             specialMsgEnabled = s.specialMsgEnabled
-            specialMsgVersion = s.specialMsgVersion
         } catch (_: Exception) {
             termsRequired = true
             forceJoinEnabled = false
             specialMsgEnabled = false
-            specialMsgVersion = 0
         }
 
         try {
@@ -196,12 +195,11 @@ fun SanjiNavGraph(
                     logged.role.priority >= UserRole.ADMIN.priority
         }
 
-        // Load special msg
+        // Special msg — show once per session, no version check
         try {
-            val userSeen = logged.profile?.specialMsgVersionSeen ?: 0
-            if (specialMsgEnabled && specialMsgVersion > userSeen) {
+            if (specialMsgEnabled && !specialMsgShownThisSession) {
                 val msg = specialMsgService.getActiveMessage()
-                if (msg != null && msg.enabled && msg.version > userSeen) {
+                if (msg != null && msg.enabled) {
                     pendingSpecialMsg = msg
                     needsSpecialMsg = true
                 } else {
@@ -235,7 +233,7 @@ fun SanjiNavGraph(
         } catch (_: Exception) { null } ?: return@LaunchedEffect
         if (currentRoute != Routes.SPLASH) return@LaunchedEffect
 
-        if (authState is AuthState.LoggedOut) {
+        if (authState is AuthState.LoggedOut && authManager.currentUser == null) {
             try {
                 navController.navigate(Routes.LOGIN) {
                     popUpTo(Routes.SPLASH) { inclusive = true }
@@ -265,13 +263,15 @@ fun SanjiNavGraph(
         }
     }
 
+    // Backup safety net — after 8s, if still on splash and truly logged out, go to LOGIN
     LaunchedEffect(Unit) {
-        delay(4000)
+        delay(8000)
         try {
             val r = navController.currentBackStackEntry?.destination?.route
             if (r == Routes.SPLASH) {
                 val isLoggedIn = authState is AuthState.LoggedIn
-                if (!isLoggedIn) {
+                val hasCachedUser = authManager.currentUser != null
+                if (!isLoggedIn && !hasCachedUser) {
                     navController.navigate(Routes.LOGIN) {
                         popUpTo(Routes.SPLASH) { inclusive = true }
                     }
@@ -340,18 +340,10 @@ fun SanjiNavGraph(
         composable(Routes.SPLASH) {
             SplashScreen(
                 onFinished = {
+                    val hasCachedUser = authManager.currentUser != null
                     when (authState) {
-                        is AuthState.LoggedOut, is AuthState.Initializing -> {
-                            try {
-                                navController.navigate(Routes.LOGIN) {
-                                    popUpTo(Routes.SPLASH) { inclusive = true }
-                                }
-                            } catch (_: Exception) {}
-                        }
                         is AuthState.LoggedIn -> {
-                            if (!gateLoaded) {
-                                return@SplashScreen
-                            }
+                            if (!gateLoaded) return@SplashScreen
                             val target = computeInitialRoute(
                                 authState = authState,
                                 gateLoaded = gateLoaded,
@@ -370,7 +362,17 @@ fun SanjiNavGraph(
                                 } catch (_: Exception) {}
                             }
                         }
-                        else -> {}
+                        is AuthState.LoggedOut -> {
+                            if (!hasCachedUser) {
+                                try {
+                                    navController.navigate(Routes.LOGIN) {
+                                        popUpTo(Routes.SPLASH) { inclusive = true }
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                            // else: wait for real state to resolve
+                        }
+                        else -> {} // Initializing — wait
                     }
                 }
             )
@@ -389,14 +391,11 @@ fun SanjiNavGraph(
                             termsRequired = s.termsRequired
                             forceJoinEnabled = s.forceJoinEnabled
                             specialMsgEnabled = s.specialMsgEnabled
-                            specialMsgVersion = s.specialMsgVersion
 
-                            // Check special msg after terms
                             try {
-                                val userSeen = loggedIn?.profile?.specialMsgVersionSeen ?: 0
-                                if (specialMsgEnabled && specialMsgVersion > userSeen) {
+                                if (specialMsgEnabled && !specialMsgShownThisSession) {
                                     val msg = specialMsgService.getActiveMessage()
-                                    if (msg != null && msg.enabled && msg.version > userSeen) {
+                                    if (msg != null && msg.enabled) {
                                         pendingSpecialMsg = msg
                                         needsSpecialMsg = true
                                     } else {
@@ -432,7 +431,6 @@ fun SanjiNavGraph(
         composable(Routes.SPECIAL_MSG) {
             val msg = pendingSpecialMsg
             if (loggedIn == null || msg == null) {
-                // No message — skip forward
                 LaunchedEffect(Unit) {
                     val next = when {
                         forceJoinEnabled && !userForceJoinOk -> Routes.FORCE_JOIN
@@ -448,8 +446,9 @@ fun SanjiNavGraph(
                     onDismiss = {
                         needsSpecialMsg = false
                         pendingSpecialMsg = null
-                        // Refresh profile so seen version reflects
-                        authManager.refreshProfile()
+                        specialMsgShownThisSession = true
+                        // Best-effort mark seen (not used for gate anymore, just telemetry)
+                        try { authManager.markSpecialMsgSeen(msg.version) } catch (_: Exception) {}
                         val next = when {
                             forceJoinEnabled && !userForceJoinOk -> Routes.FORCE_JOIN
                             !permissionsGranted -> Routes.PERMISSIONS
@@ -699,7 +698,7 @@ private fun ForceUpdateBlockingOverlay(
 ) {
     val colors = LocalSanjiColors.current
     Dialog(
-        onDismissRequest = { /* not dismissable */ },
+        onDismissRequest = { },
         properties = DialogProperties(
             dismissOnBackPress = false,
             dismissOnClickOutside = false,
@@ -715,7 +714,7 @@ private fun ForceUpdateBlockingOverlay(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    "${com.sanji.bomberpro.ui.components.SanjiEmoji.WARNING} Update Required",
+                    "⚠️ Update Required",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Black,
                     color = colors.error,
@@ -747,11 +746,7 @@ private fun ForceUpdateBlockingOverlay(
                         contentColor = Color.Black,
                     ),
                 ) {
-                    Text(
-                        "${com.sanji.bomberpro.ui.components.SanjiEmoji.DOWNLOAD} Update Now",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                    )
+                    Text("⬇️ Update Now", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
