@@ -49,6 +49,8 @@ import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.services.Announcement
 import com.sanji.bomberpro.services.AnnouncementService
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -134,7 +136,7 @@ fun AnnouncementsScreen(
             } else if (announcements.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("📢", fontSize = 48.sp)
+                        Text(SanjiEmoji.MEGAPHONE, fontSize = 48.sp)
                         Spacer(Modifier.height(8.dp))
                         Text("No announcements yet", fontSize = 14.sp, color = colors.onSurfaceVariant)
                     }
@@ -150,7 +152,7 @@ fun AnnouncementsScreen(
                             Column(Modifier.padding(12.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        if (a.priority == "high") "🔴" else "📢",
+                                        if (a.priority == "high") SanjiEmoji.BELL else SanjiEmoji.MEGAPHONE,
                                         fontSize = 14.sp,
                                     )
                                     Spacer(Modifier.width(6.dp))
@@ -176,14 +178,23 @@ fun AnnouncementsScreen(
                                 Text(a.body, fontSize = 12.sp, color = colors.onBackground)
                                 Spacer(Modifier.height(6.dp))
                                 Row {
-                                    Text("🕐 ${fmt(a.createdAt)}", fontSize = 10.sp, color = colors.onSurfaceVariant)
+                                    Text(
+                                        "${SanjiEmoji.CLOCK} ${fmt(a.createdAt)}",
+                                        fontSize = 10.sp, color = colors.onSurfaceVariant,
+                                    )
                                     if (isAdmin && a.recipients > 0) {
                                         Spacer(Modifier.width(10.dp))
-                                        Text("👥 ${a.recipients}", fontSize = 10.sp, color = colors.onSurfaceVariant)
+                                        Text(
+                                            "${SanjiEmoji.USERS} ${a.recipients}",
+                                            fontSize = 10.sp, color = colors.onSurfaceVariant,
+                                        )
                                     }
                                     if (isAdmin && a.sentByName.isNotBlank()) {
                                         Spacer(Modifier.width(10.dp))
-                                        Text("by ${a.sentByName}", fontSize = 10.sp, color = colors.onSurfaceVariant)
+                                        Text(
+                                            "by ${a.sentByName}",
+                                            fontSize = 10.sp, color = colors.onSurfaceVariant,
+                                        )
                                     }
                                 }
                             }
@@ -299,7 +310,7 @@ private fun CreateAnnouncementDialog(
                         onClick = { priority = "normal" },
                         shape = RoundedCornerShape(10.dp),
                         color = if (priority == "normal") colors.primary.copy(alpha = 0.15f) else colors.background,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).pressScale(),
                     ) {
                         Text(
                             "Normal",
@@ -314,7 +325,7 @@ private fun CreateAnnouncementDialog(
                         onClick = { priority = "high" },
                         shape = RoundedCornerShape(10.dp),
                         color = if (priority == "high") colors.error.copy(alpha = 0.15f) else colors.background,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).pressScale(),
                     ) {
                         Text(
                             "High",
