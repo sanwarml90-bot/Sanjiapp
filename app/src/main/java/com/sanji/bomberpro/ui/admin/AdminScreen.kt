@@ -36,6 +36,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,22 +62,27 @@ import com.sanji.bomberpro.services.AdminService
 import com.sanji.bomberpro.services.AdminUser
 import com.sanji.bomberpro.services.AppLockService
 import com.sanji.bomberpro.services.AppLockState
+import com.sanji.bomberpro.services.BulkDeductResult
 import com.sanji.bomberpro.services.DataExportService
 import com.sanji.bomberpro.services.FirebaseImportService
 import com.sanji.bomberpro.services.RealtimeDbService
 import com.sanji.bomberpro.services.SettingsService
 import com.sanji.bomberpro.services.SupportService
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 private enum class AdminView {
-    HOME, FIREBASE, FIREBASE_BULK, USERS, USER_DETAIL, USER_SMS_HISTORY, ROLES,
+    HOME, FIREBASE, FIREBASE_BULK, FIREBASE_HEALTH, USERS, USER_DETAIL, USER_SMS_HISTORY, ROLES,
     SETTINGS, BROADCAST, REDEEM, PRICING,
     LOGS, ANALYTICS, VERSION_CONTROL,
     GIVEAWAY_LIST, GIVEAWAY_CREATE,
     FORCE_JOIN, SUPPORT_ADMIN, PAYMENTS, APPEALS,
+    ACCOUNT_ANALYSIS, DELETED_ACCOUNTS,
 }
 
 @Composable
@@ -110,6 +117,8 @@ fun AdminScreen(
     var loadingUsers by remember { mutableStateOf(false) }
 
     var selectedUser by remember { mutableStateOf<AdminUser?>(null) }
+    var smsHistoryUid by remember { mutableStateOf("") }
+    var smsHistoryName by remember { mutableStateOf("") }
 
     var error by remember { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf<String?>(null) }
@@ -147,6 +156,7 @@ fun AdminScreen(
             isOwner = isOwner,
             onOpenFirebase = { loadFirebases(); view = AdminView.FIREBASE },
             onOpenFirebaseBulk = { view = AdminView.FIREBASE_BULK },
+            onOpenFirebaseHealth = { view = AdminView.FIREBASE_HEALTH },
             onOpenUsers = { view = AdminView.USERS },
             onOpenRoles = { view = AdminView.ROLES },
             onOpenSettings = { view = AdminView.SETTINGS },
@@ -155,6 +165,8 @@ fun AdminScreen(
             onOpenPricing = { view = AdminView.PRICING },
             onOpenLogs = { view = AdminView.LOGS },
             onOpenAnalytics = { view = AdminView.ANALYTICS },
+            onOpenAccountAnalysis = { view = AdminView.ACCOUNT_ANALYSIS },
+            onOpenDeletedAccounts = { view = AdminView.DELETED_ACCOUNTS },
             onOpenGiveaways = { view = AdminView.GIVEAWAY_LIST },
             onOpenVersionControl = { view = AdminView.VERSION_CONTROL },
             onOpenForceJoin = { view = AdminView.FORCE_JOIN },
@@ -189,6 +201,38 @@ fun AdminScreen(
                 }
             },
             onExit = onExit,
+        )
+
+        AdminView.FIREBASE_HEALTH -> FirebaseHealthScreen(
+            adminUid = adminUid,
+            onBack = { view = AdminView.HOME },
+            onFirebasesDeleted = { loadFirebases() },
+        )
+
+        AdminView.ACCOUNT_ANALYSIS -> AccountAnalysisScreen(
+            adminUid = adminUid,
+            onBack = { view = AdminView.HOME },
+            onOpenUser = { uid ->
+                scope.launch {
+                    val fresh = adminService.getUserDetail(uid)
+                    if (fresh != null) {
+                        selectedUser = fresh
+                        view = AdminView.USER_DETAIL
+                    } else {
+                        error = "User no longer exists"
+                    }
+                }
+            },
+        )
+
+        AdminView.DELETED_ACCOUNTS -> DeletedAccountsScreen(
+            adminUid = adminUid,
+            onBack = { view = AdminView.HOME },
+            onOpenHistory = { uid ->
+                smsHistoryUid = uid
+                smsHistoryName = "Deleted account"
+                view = AdminView.USER_SMS_HISTORY
+            },
         )
 
         AdminView.VERSION_CONTROL -> VersionControlScreen(
@@ -266,7 +310,7 @@ fun AdminScreen(
                     Icon(Icons.Default.Refresh, "Refresh", tint = colors.primary)
                 }
                 IconButton(onClick = { showFbPaste = true }) {
-                    Text("📋", fontSize = 16.sp)
+                    Text(SanjiEmoji.COPY, fontSize = 16.sp)
                 }
                 IconButton(onClick = { showAddFb = true }) {
                     Icon(Icons.Default.PlusOne, "Add", tint = colors.primary)
@@ -274,16 +318,35 @@ fun AdminScreen(
             }
 
             Surface(
-                onClick = { showFbPaste = true },
+                onClick = { view = AdminView.FIREBASE_HEALTH },
                 shape = RoundedCornerShape(12.dp),
-                color = colors.primary.copy(alpha = 0.12f),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                color = colors.warning.copy(alpha = 0.12f),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).pressScale(),
             ) {
                 Row(
                     modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("📋", fontSize = 20.sp)
+                    Text(SanjiEmoji.NETWORK, fontSize = 20.sp)
+                    Spacer(Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Firebase Health", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                        Text("Test all firebases · Kill dead ones", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                    }
+                }
+            }
+
+            Surface(
+                onClick = { showFbPaste = true },
+                shape = RoundedCornerShape(12.dp),
+                color = colors.primary.copy(alpha = 0.12f),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).pressScale(),
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(SanjiEmoji.COPY, fontSize = 20.sp)
                     Spacer(Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Bulk Paste URLs", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
@@ -354,11 +417,11 @@ fun AdminScreen(
                                                     val res = rtdbService.testFirebase(fb)
                                                     val msg = when {
                                                         res.onlineClients > 0 ->
-                                                            "✅ ${res.onlineClients} online (${res.totalClients} total)"
+                                                            "${SanjiEmoji.SUCCESS} ${res.onlineClients} online (${res.totalClients} total)"
                                                         res.error != null ->
-                                                            "❌ ${res.error}"
+                                                            "${SanjiEmoji.ERROR} ${res.error}"
                                                         else ->
-                                                            "❌ 0 online"
+                                                            "${SanjiEmoji.ERROR} 0 online"
                                                     }
                                                     testResults = testResults + (fb.id to msg)
                                                     testRunningFor = null
@@ -373,7 +436,7 @@ fun AdminScreen(
                                             verticalAlignment = Alignment.CenterVertically,
                                         ) {
                                             Text(
-                                                "🔍 Test",
+                                                "${SanjiEmoji.SEARCH} Test",
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.SemiBold,
                                                 color = colors.primary,
@@ -393,7 +456,7 @@ fun AdminScreen(
                                         Text(
                                             testResult,
                                             fontSize = 10.sp,
-                                            color = if (testResult.startsWith("✅")) colors.success else colors.error,
+                                            color = if (testResult.startsWith(SanjiEmoji.SUCCESS)) colors.success else colors.error,
                                         )
                                     }
                                 }
@@ -440,7 +503,7 @@ fun AdminScreen(
                                 val importSvc = FirebaseImportService()
                                 val urls = importSvc.extractUrls(fbPasteText)
                                 if (urls.isEmpty()) {
-                                    fbPasteReport = "❌ No URLs detected in pasted text."
+                                    fbPasteReport = "${SanjiEmoji.ERROR} No URLs detected in pasted text."
                                     fbPasteRunning = false
                                     return@launch
                                 }
@@ -461,7 +524,7 @@ fun AdminScreen(
                                 )
                                 val insertRes = importSvc.insertValidated(adminUid, validation.valid)
                                 if (insertRes.isFailure) {
-                                    fbPasteReport = "❌ Insert failed: ${insertRes.exceptionOrNull()?.message}"
+                                    fbPasteReport = "${SanjiEmoji.ERROR} Insert failed: ${insertRes.exceptionOrNull()?.message}"
                                     fbPasteRunning = false
                                     return@launch
                                 }
@@ -469,10 +532,10 @@ fun AdminScreen(
                                 val failed = validation.failed
                                 val failureByReason = failed.groupingBy { it.second }.eachCount()
                                 val report = buildString {
-                                    append("✅ Added: $added\n")
+                                    append("${SanjiEmoji.SUCCESS} Added: $added\n")
                                     append("⏭ Already existed: $seenExisting\n")
-                                    append("❌ Failed: ${failed.size}\n")
-                                    append("📊 Total URLs detected: ${urls.size}\n")
+                                    append("${SanjiEmoji.ERROR} Failed: ${failed.size}\n")
+                                    append("${SanjiEmoji.CHART} Total URLs detected: ${urls.size}\n")
                                     if (failureByReason.isNotEmpty()) {
                                         append("\nFailure reasons:\n")
                                         failureByReason.entries
@@ -486,7 +549,7 @@ fun AdminScreen(
                                 fbPasteRunning = false
                                 loadFirebases()
                             } catch (e: Exception) {
-                                fbPasteReport = "❌ Error: ${e.message}"
+                                fbPasteReport = "${SanjiEmoji.ERROR} Error: ${e.message}"
                                 fbPasteRunning = false
                             }
                         }
@@ -547,8 +610,8 @@ fun AdminScreen(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(u.displayName, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
-                                        if (u.banned) { Spacer(Modifier.width(6.dp)); Text("🚫", fontSize = 12.sp) }
-                                        if (u.premium) { Spacer(Modifier.width(6.dp)); Text("💎", fontSize = 12.sp) }
+                                        if (u.banned) { Spacer(Modifier.width(6.dp)); Text(SanjiEmoji.BANNED, fontSize = 12.sp) }
+                                        if (u.premium) { Spacer(Modifier.width(6.dp)); Text(SanjiEmoji.PREMIUM, fontSize = 12.sp) }
                                         if (u.role != "user") {
                                             Spacer(Modifier.width(6.dp))
                                             Text(u.role.replace('_', ' ').uppercase(), fontSize = 9.sp, fontWeight = FontWeight.Bold, color = colors.primary)
@@ -560,7 +623,7 @@ fun AdminScreen(
                                     }
                                     Text("UID: ${u.uid}", fontSize = 9.sp, color = colors.onSurfaceVariant, fontFamily = FontFamily.Monospace)
                                 }
-                                Text("💰${u.credits} 🪙${u.coins}", fontSize = 10.sp, color = colors.primary, fontWeight = FontWeight.SemiBold)
+                                Text("${SanjiEmoji.CREDITS}${u.credits} ${SanjiEmoji.COINS}${u.coins}", fontSize = 10.sp, color = colors.primary, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -582,7 +645,11 @@ fun AdminScreen(
                         isOwner = isOwner,
                         service = adminService,
                         onBack = { view = AdminView.USERS },
-                        onOpenSmsHistory = { view = AdminView.USER_SMS_HISTORY },
+                        onOpenSmsHistory = {
+                            smsHistoryUid = u.uid
+                            smsHistoryName = u.displayName.ifBlank { u.email.ifBlank { u.uid } }
+                            view = AdminView.USER_SMS_HISTORY
+                        },
                         onRefresh = {
                             scope.launch {
                                 val fresh = adminService.getUserDetail(u.uid)
@@ -595,15 +662,14 @@ fun AdminScreen(
         }
 
         AdminView.USER_SMS_HISTORY -> {
-            if (!isOwner) {
+            if (smsHistoryUid.isBlank()) {
                 LaunchedEffect(Unit) { view = AdminView.USERS }
             } else {
-                val u = selectedUser
-                if (u == null) {
-                    LaunchedEffect(Unit) { view = AdminView.USERS }
-                } else {
-                    AdminUserSmsHistoryScreen(user = u, onBack = { view = AdminView.USER_DETAIL })
-                }
+                AdminUserSmsHistoryScreen(
+                    uid = smsHistoryUid,
+                    displayName = smsHistoryName,
+                    onBack = { view = AdminView.USERS },
+                )
             }
         }
 
@@ -659,16 +725,21 @@ fun AdminScreen(
         )
     }
     if (showBulkDeduct) {
-        BulkAmountDialog(
-            title = "Deduct credits from ALL users",
-            subtitle = "Only cuts from admin-granted (manual) pool. Purchased credits untouched.",
+        BulkDeductDialog(
             onDismiss = { showBulkDeduct = false },
-            onConfirm = { amount ->
+            onConfirm = { amount, mode ->
                 scope.launch {
-                    val result = adminService.deductCreditsFromAll(amount, adminUid)
+                    val result = adminService.deductCreditsFromAll(amount, adminUid, mode)
                     showBulkDeduct = false
-                    if (result.isSuccess) success = "-$amount credits from ${result.getOrNull()} users"
-                    else error = result.exceptionOrNull()?.message ?: "Failed"
+                    result.fold(
+                        onSuccess = { r: BulkDeductResult ->
+                            success = if (mode == "all")
+                                "Wiped ${r.totalCreditsRemoved} credits from ${r.usersAffected} users"
+                            else
+                                "-$amount credits × ${r.usersAffected} users (total ${r.totalCreditsRemoved})"
+                        },
+                        onFailure = { e -> error = e.message ?: "Failed" }
+                    )
                 }
             },
         )
@@ -745,7 +816,7 @@ private fun VersionControlScreen(
                 Text("Current state", fontSize = 12.sp, color = colors.onSurfaceVariant)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (s.locked) "🔒 LOCKED — users cannot access app" else "🟢 OPEN — app works normally",
+                    if (s.locked) "${SanjiEmoji.LOCK} LOCKED — users cannot access app" else "${SanjiEmoji.UNLOCK} OPEN — app works normally",
                     fontSize = 14.sp, fontWeight = FontWeight.Bold,
                     color = if (s.locked) colors.error else colors.success,
                 )
@@ -776,22 +847,22 @@ private fun VersionControlScreen(
             Button(
                 onClick = { showUnlockConfirm = true },
                 enabled = !actionRunning,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = colors.success, contentColor = Color.White),
             ) {
                 if (actionRunning) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
-                else Text("🔓 Unlock App for All Users", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                else Text("${SanjiEmoji.UNLOCK} Unlock App for All Users", fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
         } else {
             Button(
                 onClick = { showLockDialog = true },
                 enabled = !actionRunning,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = colors.error, contentColor = Color.White),
             ) {
-                Text("🛑 Stop This Version", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text("${SanjiEmoji.LOCK} Stop This Version", fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
         }
 
@@ -869,7 +940,7 @@ private fun LockDialog(
         containerColor = colors.surface,
         titleContentColor = colors.onBackground,
         textContentColor = colors.onBackground,
-        title = { Text("⚠️ Stop This Version") },
+        title = { Text("${SanjiEmoji.WARNING} Stop This Version") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
@@ -919,6 +990,7 @@ private fun AdminHomeMenu(
     isOwner: Boolean,
     onOpenFirebase: () -> Unit,
     onOpenFirebaseBulk: () -> Unit,
+    onOpenFirebaseHealth: () -> Unit,
     onOpenUsers: () -> Unit,
     onOpenRoles: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -927,6 +999,8 @@ private fun AdminHomeMenu(
     onOpenPricing: () -> Unit,
     onOpenLogs: () -> Unit,
     onOpenAnalytics: () -> Unit,
+    onOpenAccountAnalysis: () -> Unit,
+    onOpenDeletedAccounts: () -> Unit,
     onOpenGiveaways: () -> Unit,
     onOpenVersionControl: () -> Unit,
     onOpenForceJoin: () -> Unit,
@@ -948,32 +1022,36 @@ private fun AdminHomeMenu(
             Text("Admin Panel", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = colors.onBackground, modifier = Modifier.weight(1f))
         }
         Spacer(Modifier.height(16.dp))
-        AdminMenuCard("🔥", "Manage Firebases", "Add / remove / enable realtime DB nodes", onOpenFirebase)
-        AdminMenuCard("📁", "Bulk Add Firebases", "Import from file or paste — validates URLs", onOpenFirebaseBulk)
-        AdminMenuCard("👥", "Users", if (isOwner) "Full user access" else "List only · owner views details", onOpenUsers)
+
+        AdminMenuCard("${SanjiEmoji.FIREBASE}", "Manage Firebases", "Add / remove / enable realtime DB nodes", onOpenFirebase)
+        AdminMenuCard(SanjiEmoji.COPY, "Bulk Add Firebases", "Import from file or paste — validates URLs", onOpenFirebaseBulk)
+        AdminMenuCard(SanjiEmoji.NETWORK, "Firebase Health", "Test all + kill dead (0 online / error)", onOpenFirebaseHealth)
+        AdminMenuCard(SanjiEmoji.USERS, "Users", if (isOwner) "Full user access" else "List only · owner views details", onOpenUsers)
         if (isOwner) {
-            AdminMenuCard("🔱", "Roles & Admins", "Add/remove super admins and admins · transfer ownership", onOpenRoles)
-            AdminMenuCard("⚙️", "Settings", "OTP cost, referral rewards, UPI, maintenance, force update", onOpenSettings)
-            AdminMenuCard("🔗", "Force Join", "Channels, bypass list, master toggle", onOpenForceJoin)
+            AdminMenuCard(SanjiEmoji.ADMIN_ROLE, "Roles & Admins", "Add/remove super admins and admins · transfer ownership", onOpenRoles)
+            AdminMenuCard(SanjiEmoji.SETTINGS, "Settings", "OTP cost, referral rewards, UPI, maintenance, force update", onOpenSettings)
+            AdminMenuCard(SanjiEmoji.SHARE, "Force Join", "Channels, bypass list, master toggle", onOpenForceJoin)
         }
-        AdminMenuCard("📩", "Support Tickets", "View and reply to user tickets", onOpenSupport)
+        AdminMenuCard(SanjiEmoji.TICKETS_OR_ALIAS, "Support Tickets", "View and reply to user tickets", onOpenSupport)
         if (isOwner) {
-            AdminMenuCard("💳", "Payment Review", "Approve/reject UPI payments — no Telegram bot needed", onOpenPayments)
-            AdminMenuCard("🔓", "Appeals", "Ban appeals from banned users", onOpenAppeals)
+            AdminMenuCard(SanjiEmoji.CREDITS, "Payment Review", "Approve/reject UPI payments — no Telegram bot needed", onOpenPayments)
+            AdminMenuCard(SanjiEmoji.UNLOCK, "Appeals", "Ban appeals from banned users", onOpenAppeals)
         }
-        AdminMenuCard("🎁", "Giveaways", "Create, manage, end giveaways · vote adjust · leaderboard", onOpenGiveaways)
-        AdminMenuCard("📢", "Broadcast", "Send message to all users", onOpenBroadcast)
-        AdminMenuCard("🎟", "Redeem Codes", "Create / view / copy / delete codes", onOpenRedeem)
+        AdminMenuCard(SanjiEmoji.GIFT, "Giveaways", "Create, manage, end giveaways · vote adjust · leaderboard", onOpenGiveaways)
+        AdminMenuCard(SanjiEmoji.MEGAPHONE, "Broadcast", "Send message to all users", onOpenBroadcast)
+        AdminMenuCard(SanjiEmoji.STAR, "Redeem Codes", "Create / view / copy / delete codes", onOpenRedeem)
         if (isOwner) {
-            AdminMenuCard("💳", "Pricing", "Manage credit packs and subscription plans", onOpenPricing)
-            AdminMenuCard("🛑", "Version Control", "Stop app for all users · force update", onOpenVersionControl)
-            AdminMenuCard("📜", "Logs", "Activity · Audit · Payment history", onOpenLogs)
+            AdminMenuCard(SanjiEmoji.CREDITS, "Pricing", "Manage credit packs and subscription plans", onOpenPricing)
+            AdminMenuCard(SanjiEmoji.LOCK, "Version Control", "Stop app for all users · force update", onOpenVersionControl)
+            AdminMenuCard(SanjiEmoji.HISTORY, "Logs", "Activity · Audit · Payment history", onOpenLogs)
         }
-        AdminMenuCard("📊", "Analytics", "Users · Revenue · Daily stats", onOpenAnalytics)
+        AdminMenuCard(SanjiEmoji.CHART, "Analytics", "Users · Revenue · Daily stats", onOpenAnalytics)
+        AdminMenuCard(SanjiEmoji.CHART, "Account Analysis", "Inactive · dead · duplicate accounts", onOpenAccountAnalysis)
+        AdminMenuCard(SanjiEmoji.USER, "Deleted Accounts", "Archived user snapshots · view history", onOpenDeletedAccounts)
         if (isOwner) {
-            AdminMenuCard("📤", "Data Export", "Export users, blasts, OTPs, transactions to JSON", onOpenExport)
-            AdminMenuCard("💰", "Bulk Add Credits", "Add credits to every user at once", onOpenBulkAdd)
-            AdminMenuCard("💸", "Bulk Deduct Credits", "Deduct from manual pool only · purchased credits untouched", onOpenBulkDeduct)
+            AdminMenuCard(SanjiEmoji.RECEIVE, "Data Export", "Export users, blasts, OTPs, transactions to JSON", onOpenExport)
+            AdminMenuCard(SanjiEmoji.CREDITS, "Bulk Add Credits", "Add credits to every user at once", onOpenBulkAdd)
+            AdminMenuCard(SanjiEmoji.CREDITS, "Bulk Deduct Credits", "Deduct amount OR wipe all credits from every user", onOpenBulkDeduct)
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -982,7 +1060,12 @@ private fun AdminHomeMenu(
 @Composable
 private fun AdminMenuCard(emoji: String, title: String, subtitle: String, onClick: () -> Unit) {
     val colors = LocalSanjiColors.current
-    Surface(onClick = onClick, shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = colors.surface,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).pressScale(),
+    ) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(emoji, fontSize = 26.sp)
             Spacer(Modifier.width(12.dp))
@@ -1109,6 +1192,97 @@ private fun BulkAmountDialog(title: String, subtitle: String, onDismiss: () -> U
                 Text(subtitle, fontSize = 11.sp, color = colors.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(value = text, onValueChange = { text = it.filter { c -> c.isDigit() } }, label = { Text("Amount") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+            }
+        },
+    )
+}
+
+@Composable
+private fun BulkDeductDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (Int, String) -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    var mode by remember { mutableStateOf(0) } // 0 = amount, 1 = all
+    var text by remember { mutableStateOf("") }
+    val amount = text.toIntOrNull() ?: 0
+    val canConfirm = if (mode == 1) true else amount > 0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (!canConfirm) return@TextButton
+                    if (mode == 1) onConfirm(0, "all") else onConfirm(amount, "amount")
+                },
+                enabled = canConfirm,
+            ) {
+                Text(
+                    if (mode == 1) "WIPE ALL" else "Confirm",
+                    color = colors.error,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = colors.onSurfaceVariant) } },
+        containerColor = colors.surface,
+        titleContentColor = colors.onBackground,
+        textContentColor = colors.onBackground,
+        title = { Text("Bulk Deduct Credits") },
+        text = {
+            Column {
+                TabRow(
+                    selectedTabIndex = mode,
+                    containerColor = colors.surface,
+                    contentColor = colors.primary,
+                ) {
+                    Tab(
+                        selected = mode == 0,
+                        onClick = { mode = 0 },
+                        text = { Text("Deduct Amount", fontSize = 12.sp) },
+                    )
+                    Tab(
+                        selected = mode == 1,
+                        onClick = { mode = 1 },
+                        text = { Text("Deduct ALL", fontSize = 12.sp) },
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+
+                if (mode == 0) {
+                    Text(
+                        "Deduct from every user's manual pool. Purchased credits untouched.",
+                        fontSize = 11.sp, color = colors.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it.filter { c -> c.isDigit() } },
+                        label = { Text("Amount per user") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = colors.error.copy(alpha = 0.1f),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                "${SanjiEmoji.WARNING} WIPE ALL CREDITS",
+                                fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.error,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "Sets every user's credits and manual pool to 0. Cannot be undone.",
+                                fontSize = 11.sp, color = colors.onBackground,
+                            )
+                        }
+                    }
+                }
             }
         },
     )
