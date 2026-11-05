@@ -118,7 +118,6 @@ fun SanjiNavGraph(
     var permissionsGranted by remember { mutableStateOf(false) }
     var userForceJoinOk by remember { mutableStateOf(false) }
 
-    // Special msg — once per session (until owner disables)
     var specialMsgEnabled by remember { mutableStateOf(false) }
     var pendingSpecialMsg by remember { mutableStateOf<SpecialMessage?>(null) }
     var needsSpecialMsg by remember { mutableStateOf(false) }
@@ -195,7 +194,6 @@ fun SanjiNavGraph(
                     logged.role.priority >= UserRole.ADMIN.priority
         }
 
-        // Special msg — show once per session, no version check
         try {
             if (specialMsgEnabled && !specialMsgShownThisSession) {
                 val msg = specialMsgService.getActiveMessage()
@@ -263,7 +261,6 @@ fun SanjiNavGraph(
         }
     }
 
-    // Backup safety net — after 8s, if still on splash and truly logged out, go to LOGIN
     LaunchedEffect(Unit) {
         delay(8000)
         try {
@@ -370,9 +367,8 @@ fun SanjiNavGraph(
                                     }
                                 } catch (_: Exception) {}
                             }
-                            // else: wait for real state to resolve
                         }
-                        else -> {} // Initializing — wait
+                        else -> {}
                     }
                 }
             )
@@ -440,6 +436,7 @@ fun SanjiNavGraph(
                     navController.navigate(next) { popUpTo(Routes.SPECIAL_MSG) { inclusive = true } }
                 }
             } else {
+                val messageVersion = msg.version
                 SpecialMsgScreen(
                     uid = loggedIn.user.uid,
                     message = msg,
@@ -447,8 +444,10 @@ fun SanjiNavGraph(
                         needsSpecialMsg = false
                         pendingSpecialMsg = null
                         specialMsgShownThisSession = true
-                        // Best-effort mark seen (not used for gate anymore, just telemetry)
-                        try { authManager.markSpecialMsgSeen(msg.version) } catch (_: Exception) {}
+                        // Best-effort mark seen (telemetry only — gate is session-based)
+                        scope.launch {
+                            try { authManager.markSpecialMsgSeen(messageVersion) } catch (_: Exception) {}
+                        }
                         val next = when {
                             forceJoinEnabled && !userForceJoinOk -> Routes.FORCE_JOIN
                             !permissionsGranted -> Routes.PERMISSIONS
