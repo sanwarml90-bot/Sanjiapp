@@ -13,6 +13,7 @@ import com.sanji.bomberpro.services.UserDataService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,15 +32,33 @@ class AuthManager(private val context: Context) {
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
     private var cachedOwnerEmail: String? = null
+    private var authResolved = false
 
     val currentUser: FirebaseUser? get() = auth.currentUser
 
     init {
+        // Grace timer: if still Initializing after 2.5s and no cached user, mark LoggedOut.
+        // Prevents infinite splash on slow network.
+        scope.launch {
+            delay(2500)
+            if (_authState.value is AuthState.Initializing) {
+                authResolved = true
+                if (auth.currentUser == null) {
+                    _authState.value = AuthState.LoggedOut
+                }
+            }
+        }
+
         auth.addAuthStateListener { firebaseAuth ->
             val user = firebaseAuth.currentUser
             if (user == null) {
-                _authState.value = AuthState.LoggedOut
+                // Only emit LoggedOut after first real resolution — prevents cold-start flash
+                if (authResolved) {
+                    _authState.value = AuthState.LoggedOut
+                }
+                // else: session may still be restoring, wait
             } else {
+                authResolved = true
                 scope.launch { loadProfileAndRole(user) }
             }
         }
@@ -80,6 +99,7 @@ class AuthManager(private val context: Context) {
             val result = auth.signInWithCredential(credential).await()
             val user = result.user
                 ?: return Result.failure(Exception("No user returned from Firebase"))
+            authResolved = true
             ensureUserDoc(user)
             loadProfileAndRole(user)
             Result.success(user)
@@ -91,7 +111,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  EMAIL — SIGN IN
+    //  EMAIL SIGN IN
     // ============================================================
     suspend fun signInWithEmail(email: String, password: String): Result<FirebaseUser> {
         val cleanEmail = email.trim().lowercase()
@@ -99,6 +119,7 @@ class AuthManager(private val context: Context) {
             val result = auth.signInWithEmailAndPassword(cleanEmail, password).await()
             val user = result.user
                 ?: return Result.failure(Exception("No user returned"))
+            authResolved = true
             ensureUserDoc(user)
             loadProfileAndRole(user)
             Result.success(user)
@@ -110,7 +131,7 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  EMAIL — SIGN UP
+    //  EMAIL SIGN UP
     // ============================================================
     suspend fun signUpWithEmail(
         email: String,
@@ -152,6 +173,7 @@ class AuthManager(private val context: Context) {
                 user.updateProfile(profileUpdates).await()
             } catch (_: Exception) {}
 
+            authResolved = true
             ensureUserDoc(user, username = cleanUsername)
             loadProfileAndRole(user)
             Result.success(user)
@@ -187,6 +209,7 @@ class AuthManager(private val context: Context) {
                 }
             }
             val finalUser = user ?: return Result.failure(Exception("No user returned"))
+            authResolved = true
             ensureUserDoc(finalUser)
             loadProfileAndRole(finalUser)
             Result.success(finalUser)
@@ -221,9 +244,6 @@ class AuthManager(private val context: Context) {
         else -> e.message ?: "Auth failed"
     }
 
-    // ============================================================
-    //  USER DOC
-    // ============================================================
     private suspend fun ensureUserDoc(user: FirebaseUser, username: String? = null) {
         try {
             val uid = user.uid
@@ -320,9 +340,6 @@ class AuthManager(private val context: Context) {
         }
     }
 
-    // ============================================================
-    //  LOAD PROFILE + ROLE + DEVICE LOCK
-    // ============================================================
     private suspend fun loadProfileAndRole(user: FirebaseUser) {
         try {
             val email = user.email ?: ""
@@ -427,8 +444,7 @@ class AuthManager(private val context: Context) {
                 Log.w(TAG, "Profile load failed", e)
             }
 
-            // ---- DEVICE LOCK ENFORCEMENT ----
-            // Only fires for USER role. Admin+ are exempt (handled inside service).
+            // Device lock enforcement — USER only, fail open on network error
             try {
                 val fingerprint = deviceLockService.getDeviceFingerprint()
                 val lockResult = deviceLockService.registerDevice(
@@ -442,7 +458,6 @@ class AuthManager(private val context: Context) {
                     val errMsg = lockResult.exceptionOrNull()?.message ?: ""
                     if (errMsg.startsWith("DEVICE_LOCKED:")) {
                         val lockedUid = errMsg.removePrefix("DEVICE_LOCKED:").trim()
-                        // Sign this user out — they can't use this device for another account
                         try { auth.signOut() } catch (_: Exception) {}
                         _authState.value = AuthState.DeviceLocked(
                             lockedUid = lockedUid,
@@ -527,38 +542,26 @@ class AuthManager(private val context: Context) {
     }
 
     // ============================================================
-    //  DELETE ACCOUNT (self)
+    //  DELETE ACCOUNT
     // ============================================================
-    /**
-     * Full self-delete:
-     *  1. Release device lock for this uid
-     *  2. Snapshot + soft-delete user doc → deleted_accounts
-     *  3. Delete FirebaseAuth user
-     *
-     * Blast history, OTP history, transactions stay (queried by uid for admin).
-     */
     suspend fun deleteOwnAccount(reason: String = "user-requested"): Result<Unit> {
         val user = auth.currentUser
             ?: return Result.failure(Exception("Not signed in"))
         return try {
             val uid = user.uid
 
-            // 1. Release device locks owned by this uid
             try {
                 deviceLockService.releaseAllLocksForUid(uid)
             } catch (_: Exception) {}
 
-            // 2. Soft delete (snapshot + delete user doc)
             val softDeleted = userData.softDeleteUser(uid, deletedBy = uid, reason = reason)
             if (!softDeleted) {
                 return Result.failure(Exception("Failed to archive account"))
             }
 
-            // 3. Delete auth user
             try {
                 user.delete().await()
             } catch (e: Exception) {
-                // May require re-auth — surface message
                 return Result.failure(Exception("Auth delete requires re-sign-in: ${e.message}"))
             }
 
@@ -570,9 +573,6 @@ class AuthManager(private val context: Context) {
         }
     }
 
-    // ============================================================
-    //  SPECIAL MSG MARK
-    // ============================================================
     suspend fun markSpecialMsgSeen(version: Int): Boolean {
         val user = auth.currentUser ?: return false
         return try {
@@ -584,17 +584,12 @@ class AuthManager(private val context: Context) {
         }
     }
 
-    // ============================================================
-    //  SIGN OUT
-    // ============================================================
     fun signOut() {
         auth.signOut()
+        authResolved = true
         _authState.value = AuthState.LoggedOut
     }
 
-    // ============================================================
-    //  HELPERS
-    // ============================================================
     private fun generateReferCode(uid: String): String {
         val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         var seed = uid.hashCode().toLong() and 0x7FFFFFFF
