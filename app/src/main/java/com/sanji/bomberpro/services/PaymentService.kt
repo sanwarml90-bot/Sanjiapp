@@ -1,7 +1,6 @@
 package com.sanji.bomberpro.services
 
 import android.content.Context
-import android.net.Uri
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sanji.bomberpro.FirebaseConfig
 import com.sanji.bomberpro.data.PaymentRequest
@@ -11,24 +10,27 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
+/**
+ * Payment submission — in-app only.
+ *
+ * Flow:
+ *  1. User taps buy (packs/plans) → PaymentSubmitScreen opens
+ *  2. User pays via UPI deeplink / QR / manually
+ *  3. User enters UTR (UPI transaction reference) + optional note → submits
+ *  4. Request saved to `payment_requests` with status=pending
+ *  5. Owner reviews in Admin Panel → Payment Review → Approve/Reject
+ *  6. On approve, credits/plan granted automatically
+ *
+ * No bot. No Telegram. No screenshot. Only UTR + amount.
+ */
 class PaymentService(private val context: Context) {
 
     private val db = FirebaseFirestore.getInstance()
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
 
+    // ============================================================
+    //  SUBMIT
+    // ============================================================
     suspend fun submitPayment(
         uid: String,
         userName: String,
@@ -41,25 +43,29 @@ class PaymentService(private val context: Context) {
         amountInr: Int,
         utr: String,
         description: String,
-        screenshotUri: Uri,
     ): Result<PaymentRequest> = withContext(Dispatchers.IO) {
         try {
+            val cleanUtr = utr.trim()
+            if (cleanUtr.length < 6) {
+                return@withContext Result.failure(Exception("UTR must be at least 6 characters"))
+            }
+
             val reqRef = db.collection(FirebaseConfig.COL_PAYMENT_REQUESTS).document()
             val requestId = reqRef.id
             val now = System.currentTimeMillis() / 1000L
 
-            val initial = hashMapOf<String, Any>(
+            val doc = hashMapOf<String, Any>(
                 "id" to requestId,
                 "uid" to uid,
-                "userName" to userName,
-                "userEmail" to userEmail,
+                "userName" to userName.take(64),
+                "userEmail" to userEmail.take(80),
                 "type" to type,
                 "packId" to packId,
-                "packName" to packName,
+                "packName" to packName.take(60),
                 "creditsAmount" to creditsAmount.toLong(),
                 "plan" to plan,
                 "amount" to amountInr.toLong(),
-                "utr" to utr.take(40),
+                "utr" to cleanUtr.take(40),
                 "description" to description.take(300),
                 "status" to "pending",
                 "telegramMsgId" to 0L,
@@ -67,72 +73,9 @@ class PaymentService(private val context: Context) {
                 "reviewedAt" to 0L,
                 "reviewedBy" to "",
                 "rejectionReason" to "",
+                "source" to "in-app",
             )
-            reqRef.set(initial).await()
-
-            val fileBytes = context.contentResolver.openInputStream(screenshotUri)?.use { it.readBytes() }
-                ?: throw Exception("Could not read screenshot")
-
-            val caption = buildCaption(
-                userName = userName, userEmail = userEmail, uid = uid,
-                type = type, packName = packName, creditsAmount = creditsAmount,
-                plan = plan, amountInr = amountInr, utr = utr,
-                description = description, requestId = requestId,
-            )
-
-            val keyboardJson = JSONObject().apply {
-                put("inline_keyboard", JSONArray().apply {
-                    put(JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("text", "✅ Approve")
-                            put("callback_data", "approve:$requestId")
-                        })
-                        put(JSONObject().apply {
-                            put("text", "❌ Reject")
-                            put("callback_data", "reject:$requestId")
-                        })
-                    })
-                })
-            }.toString()
-
-            val multipart = MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart("chat_id", FirebaseConfig.PAYMENT_BOT_CHAT_ID)
-                .addFormDataPart("caption", caption)
-                .addFormDataPart("parse_mode", "HTML")
-                .addFormDataPart("reply_markup", keyboardJson)
-                .addFormDataPart(
-                    "photo",
-                    "screenshot.jpg",
-                    fileBytes.toRequestBody("image/jpeg".toMediaType()),
-                )
-                .build()
-
-            val url = "https://api.telegram.org/bot${FirebaseConfig.PAYMENT_BOT_TOKEN}/sendPhoto"
-            val request = Request.Builder().url(url).post(multipart).build()
-
-            val (success, msgId) = try {
-                http.newCall(request).execute().use { resp ->
-                    val bodyStr = resp.body?.string() ?: ""
-                    if (resp.isSuccessful) {
-                        val json = JSONObject(bodyStr)
-                        if (json.optBoolean("ok", false)) {
-                            val result = json.optJSONObject("result")
-                            val mid = result?.optLong("message_id", 0L) ?: 0L
-                            true to mid
-                        } else false to 0L
-                    } else false to 0L
-                }
-            } catch (e: Exception) {
-                false to 0L
-            }
-
-            if (!success) {
-                reqRef.delete().await()
-                return@withContext Result.failure(Exception("Telegram bot upload failed"))
-            }
-
-            reqRef.update("telegramMsgId", msgId).await()
+            reqRef.set(doc).await()
 
             Result.success(
                 PaymentRequest(
@@ -146,10 +89,10 @@ class PaymentService(private val context: Context) {
                     creditsAmount = creditsAmount,
                     plan = plan,
                     amount = amountInr,
-                    utr = utr,
+                    utr = cleanUtr,
                     description = description,
                     status = "pending",
-                    telegramMsgId = msgId,
+                    telegramMsgId = 0L,
                     createdAt = now,
                 )
             )
@@ -158,42 +101,9 @@ class PaymentService(private val context: Context) {
         }
     }
 
-    private fun buildCaption(
-        userName: String, userEmail: String, uid: String,
-        type: String, packName: String, creditsAmount: Int,
-        plan: String, amountInr: Int, utr: String,
-        description: String, requestId: String,
-    ): String {
-        val itemLine = if (type == "subscription") "📦 Plan: <b>$plan</b>" else "📦 Pack: <b>$packName</b> ($creditsAmount credits)"
-        return """
-🆕 <b>PAYMENT REQUEST</b>
-
-👤 <b>${escapeHtml(userName)}</b>
-📧 ${escapeHtml(userEmail)}
-🆔 <code>$uid</code>
-
-$itemLine
-💵 Amount: <b>₹$amountInr</b>
-
-🔢 UTR: <code>${escapeHtml(utr)}</code>
-📝 Note: ${escapeHtml(description.ifBlank { "—" })}
-
-🕐 ${nowIst()}
-
-🎫 <code>$requestId</code>
-        """.trimIndent()
-    }
-
-    private fun escapeHtml(s: String): String =
-        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-    private fun nowIst(): String {
-        val tz = java.util.TimeZone.getTimeZone("Asia/Kolkata")
-        val fmt = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
-        fmt.timeZone = tz
-        return fmt.format(java.util.Date())
-    }
-
+    // ============================================================
+    //  OBSERVE (user side — live status)
+    // ============================================================
     fun observeRequest(requestId: String): Flow<PaymentRequest?> = callbackFlow {
         val ref = db.collection(FirebaseConfig.COL_PAYMENT_REQUESTS).document(requestId)
         val listener = ref.addSnapshotListener { snap, _ ->
@@ -206,6 +116,9 @@ $itemLine
         awaitClose { listener.remove() }
     }
 
+    // ============================================================
+    //  PENDING (user side)
+    // ============================================================
     suspend fun getPendingRequests(uid: String): List<PaymentRequest> = withContext(Dispatchers.IO) {
         try {
             db.collection(FirebaseConfig.COL_PAYMENT_REQUESTS)
@@ -218,6 +131,9 @@ $itemLine
         }
     }
 
+    // ============================================================
+    //  PARSE
+    // ============================================================
     private fun parseRequest(id: String, map: Map<String, Any?>): PaymentRequest {
         return PaymentRequest(
             id = id,
