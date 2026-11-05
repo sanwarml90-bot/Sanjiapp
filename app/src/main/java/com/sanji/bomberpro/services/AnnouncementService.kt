@@ -30,8 +30,14 @@ data class BroadcastPushResult(
  * `announcements/{id}` collection. Each announcement is also pushed
  * to every user as an item in `notifications` (used by NotificationsScreen).
  *
- * This service is the *admin-side* announcer. It writes both the
- * announcement doc AND the per-user notification docs.
+ * FIXED BUG: `listUserAnnouncements` previously used:
+ *   .whereEqualTo("uid", uid)
+ *   .whereEqualTo("type", "announcement")
+ *   .orderBy("ts", DESC)
+ * — 2 equality + 1 orderBy = composite index required. Without it the
+ *   query silently returns empty on missing index.
+ *
+ * Now uses single `uid` filter + client-side filter + sort.
  */
 class AnnouncementService {
 
@@ -127,7 +133,7 @@ class AnnouncementService {
     }
 
     // ============================================================
-    //  LIST — announcements for admin
+    //  LIST — admin view
     // ============================================================
     suspend fun listAnnouncements(limit: Long = 50): List<Announcement> =
         withContext(Dispatchers.IO) {
@@ -156,18 +162,23 @@ class AnnouncementService {
     }
 
     // ============================================================
-    //  READ announcements (user view — from notifications)
+    //  READ user view
     // ============================================================
+    /**
+     * User-side announcement feed.
+     * Single `uid` filter — no composite index requirement.
+     * Client-side filters by `type == "announcement"` and sorts by `ts` desc.
+     */
     suspend fun listUserAnnouncements(uid: String, limit: Long = 50): List<Announcement> =
         withContext(Dispatchers.IO) {
             try {
                 db.collection(FirebaseConfig.COL_NOTIFICATIONS)
                     .whereEqualTo("uid", uid)
-                    .whereEqualTo("type", "announcement")
-                    .orderBy("ts", Query.Direction.DESCENDING)
-                    .limit(limit)
+                    .limit(300)
                     .get().await()
-                    .documents.mapNotNull { d ->
+                    .documents
+                    .filter { it.getString("type") == "announcement" }
+                    .mapNotNull { d ->
                         val map = d.data ?: return@mapNotNull null
                         Announcement(
                             id = map["broadcastId"] as? String ?: d.id,
@@ -177,6 +188,8 @@ class AnnouncementService {
                             createdAt = (map["ts"] as? Number)?.toLong() ?: 0L,
                         )
                     }
+                    .sortedByDescending { it.createdAt }
+                    .take(limit.toInt())
             } catch (e: Exception) {
                 Log.w(TAG, "listUserAnnouncements failed", e)
                 emptyList()
