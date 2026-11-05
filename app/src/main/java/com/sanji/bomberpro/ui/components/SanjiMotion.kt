@@ -19,7 +19,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -53,6 +52,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -64,11 +64,7 @@ import com.sanji.bomberpro.theme.LocalSanjiColors
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
-// ============================================================
-//  MOTION CONSTANTS — single source of truth for all timings
-// ============================================================
 object SanjiAnim {
-    // Durations (ms)
     const val INSTANT = 80
     const val FAST = 160
     const val NORMAL = 260
@@ -77,38 +73,25 @@ object SanjiAnim {
     const val BREATHE = 1600
     const val SHIMMER = 1200
     const val GLOW = 2200
-
-    // Stagger gap between list children (ms)
     const val STAGGER = 55
-
-    // Easing helpers
     val smoothEasing = FastOutSlowInEasing
-
-    // Springs
     fun <T> pressSpring() = spring<T>(
         dampingRatio = Spring.DampingRatioMediumBouncy,
         stiffness = Spring.StiffnessLow,
     )
-
     fun <T> gentleSpring() = spring<T>(
         dampingRatio = Spring.DampingRatioNoBouncy,
         stiffness = Spring.StiffnessMediumLow,
     )
 }
 
-// ============================================================
-//  EMOJI — single registry, referenced everywhere
-// ============================================================
 object SanjiEmoji {
-    // Nav
     const val HOME = "🏠"
     const val BLAST = "🚀"
     const val ADMIN = "🛡️"
     const val OTP = "🔐"
     const val HISTORY = "📜"
     const val WALLET = "💳"
-
-    // Status
     const val SUCCESS = "✅"
     const val ERROR = "❌"
     const val WARNING = "⚠️"
@@ -117,15 +100,11 @@ object SanjiEmoji {
     const val LOADING = "⏬"
     const val LOCK = "🔒"
     const val UNLOCK = "🔓"
-
-    // Money
     const val CREDITS = "💰"
     const val COINS = "🪙"
     const val GIFT = "🎁"
     const val TRANSFER = "🔁"
     const val RECEIPT = "🧾"
-
-    // Actions
     const val SEND = "📤"
     const val RECEIVE = "📥"
     const val COPY = "📋"
@@ -138,8 +117,6 @@ object SanjiEmoji {
     const val SHARE = "🔗"
     const val DOWNLOAD = "⬇️"
     const val UPLOAD = "⬆️"
-
-    // Feature
     const val PHONE = "📞"
     const val MESSAGE = "💬"
     const val DEVICE = "📱"
@@ -157,22 +134,16 @@ object SanjiEmoji {
     const val KEY = "🔑"
     const val BELL = "🔔"
     const val MEGAPHONE = "📢"
-
-    // People / roles
     const val USER = "👤"
     const val USERS = "👥"
     const val ADMIN_ROLE = "🔱"
     const val OWNER = "👑"
     const val BANNED = "🚫"
-
-    // Numbers
     const val NEW = "🆕"
     const val TOTAL = "📊"
     const val CHART = "📈"
     const val CLOCK = "🕐"
     const val CALENDAR = "📅"
-
-    // Misc
     const val HEART = "❤️"
     const val SPARKLE = "✨"
     const val BOLT = "⚡"
@@ -180,14 +151,6 @@ object SanjiEmoji {
     const val WAVE = "👋"
 }
 
-// ============================================================
-//  MODIFIER EXTENSIONS
-// ============================================================
-
-/**
- * Tactile press feedback: scales down to 0.95 on press, springs back.
- * Use on ANY clickable Surface/Button/Box — no extra wiring required.
- */
 fun Modifier.pressScale(): Modifier = composed {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -196,17 +159,9 @@ fun Modifier.pressScale(): Modifier = composed {
         animationSpec = SanjiAnim.pressSpring(),
         label = "pressScale",
     )
-    this
-        .scale(scale)
-        .then(
-            Modifier // keep the interaction source available if caller needs it
-        )
+    this.scale(scale)
 }
 
-/**
- * Fade-in + slide-up entry animation. Drop into any composable's modifier chain.
- * `delayMs` lets you stagger.
- */
 fun Modifier.fadeSlideIn(
     delayMs: Int = 0,
     startOffsetY: Int = 24,
@@ -228,18 +183,9 @@ fun Modifier.fadeSlideIn(
     )
     this
         .alpha(alpha)
-        .then(Modifier)
-        .graphicsLayerY(offsetY)
+        .graphicsLayer { translationY = offsetY }
 }
 
-private fun Modifier.graphicsLayerY(offset: Float): Modifier =
-    androidx.compose.ui.graphics.graphicsLayer {
-        translationY = offset
-    }
-
-/**
- * Ambient infinite pulse: alpha breathing for glow effects.
- */
 fun Modifier.pulse(minAlpha: Float = 0.4f, maxAlpha: Float = 1f): Modifier = composed {
     val transition = rememberInfiniteTransition(label = "pulse")
     val alpha by transition.animateFloat(
@@ -254,10 +200,6 @@ fun Modifier.pulse(minAlpha: Float = 0.4f, maxAlpha: Float = 1f): Modifier = com
     this.alpha(alpha)
 }
 
-/**
- * Shimmer sweep: linear gradient scrolls across the surface.
- * Use for loading placeholders.
- */
 fun Modifier.shimmer(
     baseColor: Color = Color(0xFF1A1A1A),
     highlightColor: Color = Color(0xFF2A2A2A),
@@ -283,13 +225,6 @@ fun Modifier.shimmer(
         .background(brush)
 }
 
-// ============================================================
-//  REUSABLE COMPOSABLES
-// ============================================================
-
-/**
- * Shimmer placeholder for loading states.
- */
 @Composable
 fun ShimmerBox(
     modifier: Modifier = Modifier,
@@ -310,9 +245,6 @@ fun ShimmerBox(
     )
 }
 
-/**
- * Animated counter: smoothly tweens to target value on change.
- */
 @Composable
 fun AnimatedCounter(
     value: Int,
@@ -339,9 +271,6 @@ fun AnimatedCounter(
     )
 }
 
-/**
- * Gradient primary button with press feedback + shine accent.
- */
 @Composable
 fun GradientButton(
     text: String,
@@ -408,9 +337,6 @@ fun GradientButton(
     }
 }
 
-/**
- * Emoji chip: emoji + label, pill-shaped with subtle background.
- */
 @Composable
 fun EmojiChip(
     emoji: String,
@@ -441,9 +367,6 @@ fun EmojiChip(
     }
 }
 
-/**
- * Success burst: checkmark scales in + particle-like glow behind.
- */
 @Composable
 fun SuccessBurst(
     modifier: Modifier = Modifier,
@@ -475,9 +398,6 @@ fun SuccessBurst(
     }
 }
 
-/**
- * Error shake: horizontal wiggle for error feedback.
- */
 @Composable
 fun ErrorShake(
     modifier: Modifier = Modifier,
@@ -495,7 +415,7 @@ fun ErrorShake(
     Box(
         modifier = modifier
             .size(size)
-            .androidxOffset(shake.value),
+            .graphicsLayer { translationX = shake.value },
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -511,14 +431,6 @@ fun ErrorShake(
     }
 }
 
-private fun Modifier.androidxOffset(x: Float): Modifier =
-    androidx.compose.ui.graphics.graphicsLayer {
-        translationX = x
-    }
-
-/**
- * Rotating glow ring: for splash, loading states.
- */
 @Composable
 fun RotatingGlowRing(
     modifier: Modifier = Modifier,
@@ -540,6 +452,7 @@ fun RotatingGlowRing(
         modifier = modifier
             .size(size)
             .clip(CircleShape)
+            .graphicsLayer { rotationZ = angle }
             .background(
                 brush = Brush.sweepGradient(
                     colors = listOf(
@@ -550,10 +463,8 @@ fun RotatingGlowRing(
                     ),
                     center = Offset.Unspecified,
                 )
-            )
-            .androidxRotate(angle),
+            ),
     ) {
-        // Inner cutout to create ring effect
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -564,14 +475,6 @@ fun RotatingGlowRing(
     }
 }
 
-private fun Modifier.androidxRotate(degrees: Float): Modifier =
-    androidx.compose.ui.graphics.graphicsLayer {
-        rotationZ = degrees
-    }
-
-/**
- * Typing dots: three dots animating in sequence — loading indicator.
- */
 @Composable
 fun TypingDots(
     size: Dp = 10.dp,
@@ -611,9 +514,6 @@ fun TypingDots(
     }
 }
 
-/**
- * Animated gradient background: slow rotating brush behind content.
- */
 @Composable
 fun AnimatedGradientBg(
     modifier: Modifier = Modifier,
@@ -650,10 +550,6 @@ fun AnimatedGradientBg(
     }
 }
 
-/**
- * Staggered wrapper: drops each child in sequence.
- * Usage: StaggeredList { item1(); item2(); item3() }
- */
 @Composable
 fun StaggeredColumn(
     modifier: Modifier = Modifier,
@@ -664,9 +560,6 @@ fun StaggeredColumn(
     }
 }
 
-/**
- * Emoji bullet list — reuse for feature lists.
- */
 @Composable
 fun EmojiBullet(
     emoji: String,
@@ -688,9 +581,6 @@ fun EmojiBullet(
     }
 }
 
-/**
- * Section header with emoji + title + optional action.
- */
 @Composable
 fun SectionHeader(
     emoji: String,
@@ -718,9 +608,6 @@ fun SectionHeader(
     }
 }
 
-/**
- * Animated visibility wrapper with slide + fade — for expandable content.
- */
 @Composable
 fun FadeSlideVisibility(
     visible: Boolean,
@@ -743,9 +630,6 @@ fun FadeSlideVisibility(
     }
 }
 
-/**
- * Small glow border around a card — draws animated outline.
- */
 @Composable
 fun GlowBorder(
     modifier: Modifier = Modifier,
@@ -779,9 +663,6 @@ fun GlowBorder(
     }
 }
 
-/**
- * Animated icon badge — for notification bell counts, etc.
- */
 @Composable
 fun AnimatedBadge(
     count: Int,
@@ -812,9 +693,6 @@ fun AnimatedBadge(
     }
 }
 
-/**
- * Animated emoji icon — gently bobs up/down. Use for hero icons.
- */
 @Composable
 fun BobbingEmoji(
     emoji: String,
@@ -834,21 +712,10 @@ fun BobbingEmoji(
     Text(
         text = emoji,
         fontSize = fontSize,
-        modifier = modifier.androidxOffset(0f).then(
-            Modifier.androidxOffsetY(offsetY)
-        ),
+        modifier = modifier.graphicsLayer { translationY = offsetY },
     )
 }
 
-private fun Modifier.androidxOffsetY(y: Float): Modifier =
-    androidx.compose.ui.graphics.graphicsLayer {
-        translationY = y
-    }
-
-/**
- * Icon helper — animated entrance + optional glow.
- * Useful for hero sections on every screen.
- */
 @Composable
 fun HeroIcon(
     icon: ImageVector,
