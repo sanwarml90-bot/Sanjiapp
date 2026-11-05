@@ -106,6 +106,24 @@ fun SettingsScreen(
         }
     }
 
+    // ============================================================
+    //  Extract settings to values UP FRONT so they are in scope
+    //  for both the Column rendering AND the bottom dialogs.
+    // ============================================================
+    val otpCost = (settings["otpCost"] as? Number)?.toInt() ?: 1
+    val dailyBonus = (settings["dailyBonusCredits"] as? Number)?.toInt() ?: 2
+    val refCredits = (settings["refCredits"] as? Number)?.toInt() ?: 3
+    val refCoins = (settings["refCoins"] as? Number)?.toInt() ?: 1
+    val upiId = settings["upiId"] as? String ?: ""
+    val upiName = settings["upiName"] as? String ?: ""
+    val maint = settings["maintenance"] as? Boolean ?: false
+    val maintMsg = settings["maintenanceMsg"] as? String ?: ""
+    val latestVer = settings["latestVersion"] as? String ?: "1.0.0"
+    val minVer = settings["minVersion"] as? String ?: "1.0.0"
+    val apkUrl = settings["apkUrl"] as? String ?: ""
+    val changelog = settings["changelog"] as? String ?: ""
+    val forceUpdate = settings["forceUpdate"] as? Boolean ?: false
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -130,22 +148,8 @@ fun SettingsScreen(
             Box(Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = colors.primary)
             }
-            return
+            return@Column
         }
-
-        val otpCost = (settings["otpCost"] as? Number)?.toInt() ?: 1
-        val dailyBonus = (settings["dailyBonusCredits"] as? Number)?.toInt() ?: 2
-        val refCredits = (settings["refCredits"] as? Number)?.toInt() ?: 3
-        val refCoins = (settings["refCoins"] as? Number)?.toInt() ?: 1
-        val upiId = settings["upiId"] as? String ?: ""
-        val upiName = settings["upiName"] as? String ?: ""
-        val maint = settings["maintenance"] as? Boolean ?: false
-        val maintMsg = settings["maintenanceMsg"] as? String ?: ""
-        val latestVer = settings["latestVersion"] as? String ?: "1.0.0"
-        val minVer = settings["minVersion"] as? String ?: "1.0.0"
-        val apkUrl = settings["apkUrl"] as? String ?: ""
-        val changelog = settings["changelog"] as? String ?: ""
-        val forceUpdate = settings["forceUpdate"] as? Boolean ?: false
 
         // ============================================================
         //  RELEASE CURRENT VERSION — ONE TAP
