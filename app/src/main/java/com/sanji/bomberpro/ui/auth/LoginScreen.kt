@@ -1,5 +1,7 @@
 package com.sanji.bomberpro.ui.auth
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +25,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -52,6 +55,9 @@ import com.sanji.bomberpro.FirebaseConfig
 import com.sanji.bomberpro.data.AuthManager
 import com.sanji.bomberpro.data.AuthState
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.launch
 
 private enum class AuthMode { SIGN_IN, SIGN_UP }
@@ -74,14 +80,22 @@ fun LoginScreen(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var info by remember { mutableStateOf<String?>(null) }
+    var deviceLockMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(authState) {
         when (val s = authState) {
             is AuthState.LoggedIn -> {
                 error = null
                 info = null
+                deviceLockMessage = null
                 loading = false
                 onLoginSuccess()
+            }
+            is AuthState.DeviceLocked -> {
+                deviceLockMessage = s.message
+                error = null
+                info = null
+                loading = false
             }
             is AuthState.Error -> {
                 error = s.message
@@ -119,6 +133,7 @@ fun LoginScreen(
                 fontWeight = FontWeight.Black,
                 color = colors.onBackground,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.fadeSlideIn(delayMs = 0),
             )
             Text(
                 text = "PRO",
@@ -126,6 +141,7 @@ fun LoginScreen(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 10.sp,
                 color = colors.primary,
+                modifier = Modifier.fadeSlideIn(delayMs = 80),
             )
 
             Spacer(Modifier.height(8.dp))
@@ -135,9 +151,67 @@ fun LoginScreen(
                 fontSize = 12.sp,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.fadeSlideIn(delayMs = 160),
             )
 
             Spacer(Modifier.height(24.dp))
+
+            // Device locked banner
+            if (deviceLockMessage != null) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = colors.error.copy(alpha = 0.15f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(SanjiEmoji.LOCK, fontSize = 18.sp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "Device Locked",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colors.error,
+                            )
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            deviceLockMessage!!,
+                            fontSize = 11.sp,
+                            color = colors.onBackground,
+                            lineHeight = 15.sp,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Surface(
+                            onClick = {
+                                try {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/sanjipro5"))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                } catch (_: Exception) {}
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            color = colors.error,
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(SanjiEmoji.MESSAGE, fontSize = 12.sp)
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "Contact Admin",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+            }
 
             // Mode toggle
             Row(
@@ -150,26 +224,35 @@ fun LoginScreen(
                 ModeTab(
                     label = "Sign In",
                     selected = mode == AuthMode.SIGN_IN,
-                    onClick = { mode = AuthMode.SIGN_IN; error = null; info = null },
+                    onClick = {
+                        mode = AuthMode.SIGN_IN
+                        error = null
+                        info = null
+                    },
                     modifier = Modifier.weight(1f),
                 )
                 ModeTab(
                     label = "Sign Up",
                     selected = mode == AuthMode.SIGN_UP,
-                    onClick = { mode = AuthMode.SIGN_UP; error = null; info = null },
+                    onClick = {
+                        mode = AuthMode.SIGN_UP
+                        error = null
+                        info = null
+                    },
                     modifier = Modifier.weight(1f),
                 )
             }
 
             Spacer(Modifier.height(20.dp))
 
-            // Google button — Sign In only
+            // Google button — sign in only
             if (mode == AuthMode.SIGN_IN) {
                 Button(
                     onClick = {
                         loading = true
                         error = null
                         info = null
+                        deviceLockMessage = null
                         scope.launch {
                             try {
                                 val credentialManager = CredentialManager.create(context)
@@ -210,7 +293,10 @@ fun LoginScreen(
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                        .pressScale(),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.White,
@@ -257,7 +343,7 @@ fun LoginScreen(
                 Spacer(Modifier.height(16.dp))
             }
 
-            // Username field — sign up only
+            // Username (sign up only)
             if (mode == AuthMode.SIGN_UP) {
                 OutlinedTextField(
                     value = username,
@@ -303,6 +389,7 @@ fun LoginScreen(
                 onClick = {
                     error = null
                     info = null
+                    deviceLockMessage = null
                     if (email.isBlank() || !email.contains("@")) {
                         error = "Valid email required"
                         return@Button
@@ -339,7 +426,10 @@ fun LoginScreen(
                         loading = false
                     }
                 },
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .pressScale(),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = colors.primary,
@@ -396,7 +486,43 @@ fun LoginScreen(
                 )
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(20.dp))
+
+            // Contact admin button
+            Surface(
+                onClick = {
+                    try {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/sanjipro5"))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    } catch (_: Exception) {
+                        error = "No app to open Telegram"
+                    }
+                },
+                shape = RoundedCornerShape(14.dp),
+                color = colors.surface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pressScale(),
+            ) {
+                Row(
+                    modifier = Modifier.padding(vertical = 14.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(SanjiEmoji.MESSAGE, fontSize = 14.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Contact Admin",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.onBackground,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
 
             Text(
                 text = "By continuing, you agree to the Terms shown after login.",
