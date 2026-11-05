@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g. v1.0.0)'
+        description: 'Version tag (e.g. v1.0.319) — must match app/version.properties'
         required: true
 
 permissions:
@@ -36,6 +36,25 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: Read version from version.properties
+        id: ver
+        run: |
+          CODE=$(grep -E '^VERSION_CODE=' app/version.properties | cut -d= -f2 | tr -d '[:space:]')
+          NAME=$(grep -E '^VERSION_NAME=' app/version.properties | cut -d= -f2 | tr -d '[:space:]')
+          echo "code=$CODE" >> $GITHUB_OUTPUT
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          echo "Building version: $NAME (code $CODE)"
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG=${GITHUB_REF#refs/tags/}
+          else
+            TAG=${{ github.event.inputs.version }}
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
       - name: Decode release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -47,43 +66,30 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/sanji-release.jks"
           echo "KEYSTORE_FILE=$RUNNER_TEMP/sanji-release.jks" >> $GITHUB_ENV
 
-      - name: Determine version
-        id: ver
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            VERSION=${GITHUB_REF#refs/tags/}
-          else
-            VERSION=${{ github.event.inputs.version }}
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "version_code=${{ github.run_number }}" >> $GITHUB_OUTPUT
-          echo "version_name=${VERSION#v}" >> $GITHUB_OUTPUT
-
       - name: Build Release APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          SANJI_APP_VERSION_CODE: ${{ steps.ver.outputs.version_code }}
-          SANJI_APP_VERSION_NAME: ${{ steps.ver.outputs.version_name }}
         run: gradle :app:assembleRelease --stacktrace
 
       - name: Rename APK
         run: |
           mkdir -p dist
           SRC=$(find app/build/outputs/apk/release -name "*.apk" -type f | head -n 1)
-          DEST="dist/sanji-bomber-pro-${{ steps.ver.outputs.version_name }}.apk"
+          DEST="dist/sanji-bomber-pro-${{ steps.ver.outputs.name }}.apk"
           cp "$SRC" "$DEST"
           sha256sum "$DEST" > "$DEST.sha256"
           ls -lah dist/
 
       - name: Create GitHub Release
+        id: release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.version }}
-          name: "Sanji Bomber Pro ${{ steps.ver.outputs.version_name }}"
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Sanji Bomber Pro ${{ steps.ver.outputs.name }}"
           body: |
-            ## Sanji Bomber Pro ${{ steps.ver.outputs.version_name }}
+            ## Sanji Bomber Pro ${{ steps.ver.outputs.name }}
 
             **Build:** ${{ github.run_number }}
             **Commit:** ${{ github.sha }}
@@ -102,3 +108,41 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Firestore (force update old users)
+        env:
+          FIREBASE_SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          VERSION_NAME: ${{ steps.ver.outputs.name }}
+          VERSION_CODE: ${{ steps.ver.outputs.code }}
+          APK_URL: https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/sanji-bomber-pro-${{ steps.ver.outputs.name }}.apk
+          CHANGELOG: "New version ${{ steps.ver.outputs.name }} released"
+        run: |
+          if [ -z "$FIREBASE_SA" ]; then
+            echo "::warning::FIREBASE_SERVICE_ACCOUNT secret missing — skipping Firestore update"
+            exit 0
+          fi
+          pip install firebase-admin
+          echo "$FIREBASE_SA" > "$RUNNER_TEMP/firebase-sa.json"
+          python3 - <<'PYEOF'
+          import os, json
+          import firebase_admin
+          from firebase_admin import credentials, firestore
+
+          sa_path = os.environ['RUNNER_TEMP'] + '/firebase-sa.json'
+          cred = credentials.Certificate(sa_path)
+          firebase_admin.initialize_app(cred)
+          db = firestore.client()
+
+          version_name = os.environ['VERSION_NAME']
+          apk_url = os.environ['APK_URL']
+          changelog = os.environ['CHANGELOG']
+
+          db.collection('settings').document('global').set({
+              'latestVersion': version_name,
+              'minVersion': version_name,
+              'apkUrl': apk_url,
+              'changelog': changelog,
+              'forceUpdate': False,
+          }, merge=True)
+          print(f"Firestore updated: minVersion={version_name}")
+          PYEOF
