@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 
 class UserDataService {
 
@@ -351,14 +352,659 @@ class UserDataService {
     }
 
     // ============================================================
-    //  MASK
+    //  BLAST HISTORY
     // ============================================================
-    fun maskNumber(number: String): String {
-        if (number.length <= 4) return number
-        return number.take(2) + "******" + number.takeLast(4)
+    suspend fun saveBlastHistory(
+        uid: String,
+        targetFull: String,
+        message: String,
+        requested: Int,
+        sent: Int,
+        failed: Int,
+        durationSec: Long,
+        speed: String,
+        devicePool: List<String>,
+        status: String = "completed",
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val ref = db.collection(FirebaseConfig.COL_BLASTS).document()
+            val masked = maskNumber(targetFull)
+            ref.set(
+                hashMapOf(
+                    "id" to ref.id,
+                    "uid" to uid,
+                    "type" to "single",
+                    "targetFull" to targetFull,
+                    "targetMasked" to masked,
+                    "message" to message.take(500),
+                    "requested" to requested,
+                    "sent" to sent,
+                    "failed" to failed,
+                    "durationSec" to durationSec,
+                    "speed" to speed,
+                    "devicePool" to devicePool,
+                    "status" to status,
+                    "ts" to nowSec(),
+                )
+            ).await()
+
+            db.collection(FirebaseConfig.COL_USERS).document(uid)
+                .update(
+                    "totalBlasts", FieldValue.increment(1L),
+                    "totalSms", FieldValue.increment(sent.toLong()),
+                ).await()
+
+            ref.id
+        } catch (e: Exception) { null }
+    }
+
+    // NO composite index required — filter + sort client-side
+    suspend fun getBlastRecords(uid: String, limit: Long = 50): List<BlastRecord> =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_BLASTS)
+                    .whereEqualTo("uid", uid)
+                    .limit(500)
+                    .get().await()
+                    .documents.mapNotNull { d ->
+                        try {
+                            BlastRecord(
+                                id = d.id,
+                                uid = d.getString("uid") ?: "",
+                                type = d.getString("type") ?: "single",
+                                targetFull = d.getString("targetFull") ?: "",
+                                targetMasked = d.getString("targetMasked") ?: "",
+                                message = d.getString("message") ?: "",
+                                requested = (d.getLong("requested") ?: 0L).toInt(),
+                                sent = (d.getLong("sent") ?: 0L).toInt(),
+                                failed = (d.getLong("failed") ?: 0L).toInt(),
+                                durationSec = d.getLong("durationSec") ?: 0L,
+                                speed = d.getString("speed") ?: "",
+                                devicePool = (d.get("devicePool") as? List<*>)?.map { it.toString() } ?: emptyList(),
+                                status = d.getString("status") ?: "completed",
+                                ts = d.getLong("ts") ?: 0L,
+                            )
+                        } catch (_: Exception) { null }
+                    }
+                    .sortedByDescending { it.ts }
+                    .take(limit.toInt())
+            } catch (e: Exception) { emptyList() }
+        }
+
+    // ============================================================
+    //  BULK BLAST HISTORY
+    // ============================================================
+    suspend fun saveBulkBlastHistory(
+        uid: String,
+        numbers: List<String>,
+        message: String,
+        perNumberCount: Int,
+        power: Int,
+        totalSent: Int,
+        totalFailed: Int,
+        durationSec: Long,
+        speed: String,
+        status: String = "completed",
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val ref = db.collection(FirebaseConfig.COL_BLASTS).document()
+            ref.set(
+                hashMapOf(
+                    "id" to ref.id,
+                    "uid" to uid,
+                    "type" to "bulk",
+                    "numbersCount" to numbers.size,
+                    "targetsMasked" to numbers.take(50).map { maskNumber(it) },
+                    "message" to message.take(500),
+                    "perNumberCount" to perNumberCount,
+                    "power" to power,
+                    "requested" to (numbers.size * perNumberCount * power),
+                    "sent" to totalSent,
+                    "failed" to totalFailed,
+                    "durationSec" to durationSec,
+                    "speed" to speed,
+                    "status" to status,
+                    "ts" to nowSec(),
+                )
+            ).await()
+
+            db.collection(FirebaseConfig.COL_USERS).document(uid)
+                .update(
+                    "totalBlasts", FieldValue.increment(1L),
+                    "totalSms", FieldValue.increment(totalSent.toLong()),
+                ).await()
+
+            ref.id
+        } catch (e: Exception) { null }
+    }
+
+    suspend fun getBulkBlastRecords(uid: String, limit: Long = 20): List<BlastRecord> =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_BLASTS)
+                    .whereEqualTo("uid", uid)
+                    .limit(200)
+                    .get().await()
+                    .documents.mapNotNull { d ->
+                        try {
+                            BlastRecord(
+                                id = d.id,
+                                uid = d.getString("uid") ?: "",
+                                type = d.getString("type") ?: "bulk",
+                                targetFull = "",
+                                targetMasked = "${(d.getLong("numbersCount") ?: 0L)} numbers",
+                                message = d.getString("message") ?: "",
+                                requested = (d.getLong("requested") ?: 0L).toInt(),
+                                sent = (d.getLong("sent") ?: 0L).toInt(),
+                                failed = (d.getLong("failed") ?: 0L).toInt(),
+                                durationSec = d.getLong("durationSec") ?: 0L,
+                                speed = d.getString("speed") ?: "",
+                                devicePool = emptyList(),
+                                status = d.getString("status") ?: "completed",
+                                ts = d.getLong("ts") ?: 0L,
+                            )
+                        } catch (_: Exception) { null }
+                    }
+                    .filter { it.type == "bulk" }
+                    .sortedByDescending { it.ts }
+                    .take(limit.toInt())
+            } catch (e: Exception) { emptyList() }
+        }
+
+    // ============================================================
+    //  OTP HISTORY
+    // ============================================================
+    suspend fun saveOtpHistory(
+        uid: String,
+        otp: String,
+        sender: String,
+        deviceName: String,
+        deviceShort: String,
+        devicePhone: String,
+        firebaseLabel: String,
+        mode: String,
+        cost: Int,
+        refunded: Boolean = false,
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val ref = db.collection(FirebaseConfig.COL_OTP_FETCHES).document()
+            ref.set(
+                hashMapOf(
+                    "id" to ref.id,
+                    "uid" to uid,
+                    "otp" to otp.take(32),
+                    "sender" to sender.take(64),
+                    "deviceName" to deviceName.take(32),
+                    "deviceShort" to deviceShort.take(20),
+                    "devicePhone" to devicePhone,
+                    "firebaseLabel" to firebaseLabel.take(32),
+                    "mode" to mode,
+                    "cost" to cost.toLong(),
+                    "refunded" to refunded,
+                    "ts" to nowSec(),
+                )
+            ).await()
+
+            db.collection(FirebaseConfig.COL_USERS).document(uid)
+                .update("totalOtps", FieldValue.increment(1L)).await()
+
+            ref.id
+        } catch (e: Exception) { null }
+    }
+
+    suspend fun getOtpRecords(uid: String, limit: Long = 100): List<OtpRecord> =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_OTP_FETCHES)
+                    .whereEqualTo("uid", uid)
+                    .limit(500)
+                    .get().await()
+                    .documents.mapNotNull { d ->
+                        try {
+                            OtpRecord(
+                                id = d.id,
+                                uid = d.getString("uid") ?: "",
+                                otp = d.getString("otp") ?: "",
+                                sender = d.getString("sender") ?: "",
+                                deviceName = d.getString("deviceName") ?: "",
+                                deviceShort = d.getString("deviceShort") ?: "",
+                                devicePhone = d.getString("devicePhone") ?: "",
+                                firebaseLabel = d.getString("firebaseLabel") ?: "",
+                                mode = d.getString("mode") ?: "",
+                                cost = (d.getLong("cost") ?: 0L).toInt(),
+                                refunded = d.getBoolean("refunded") ?: false,
+                                ts = d.getLong("ts") ?: 0L,
+                            )
+                        } catch (_: Exception) { null }
+                    }
+                    .sortedByDescending { it.ts }
+                    .take(limit.toInt())
+            } catch (e: Exception) { emptyList() }
+        }
+
+    // ============================================================
+    //  TRANSACTION HISTORY
+    // ============================================================
+    suspend fun getTransactionRecords(uid: String, limit: Long = 100): List<CreditTransaction> =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_TRANSACTIONS)
+                    .whereEqualTo("uid", uid)
+                    .limit(500)
+                    .get().await()
+                    .documents.mapNotNull { d ->
+                        try {
+                            CreditTransaction(
+                                id = d.id,
+                                uid = d.getString("uid") ?: "",
+                                type = d.getString("type") ?: "",
+                                delta = (d.getLong("delta") ?: 0L).toInt(),
+                                reason = d.getString("reason") ?: "",
+                                ts = d.getLong("ts") ?: 0L,
+                            )
+                        } catch (_: Exception) { null }
+                    }
+                    .sortedByDescending { it.ts }
+                    .take(limit.toInt())
+            } catch (e: Exception) { emptyList() }
+        }
+
+    // ============================================================
+    //  DAILY BONUS
+    // ============================================================
+    suspend fun tryClaimDailyBonus(uid: String): Int? = withContext(Dispatchers.IO) {
+        val settings = getGlobalSettings()
+        val bonus = settings.dailyBonusCredits
+        if (bonus <= 0) return@withContext null
+        val userRef = db.collection(FirebaseConfig.COL_USERS).document(uid)
+        val cooldown = 24L * 3600L
+        try {
+            val result = db.runTransaction { txn ->
+                val snap = txn.get(userRef)
+                val last = snap.getLong("dailyBonusTs") ?: 0L
+                val now = nowSec()
+                if (now - last < cooldown) throw IllegalStateException("COOLDOWN")
+                val current = (snap.getLong("credits") ?: 0L).toInt().coerceAtLeast(0)
+                txn.update(userRef, "credits", (current + bonus).toLong(), "dailyBonusTs", now)
+                bonus
+            }.await()
+            logTransaction(uid, "daily_bonus", result, "daily-bonus")
+            result
+        } catch (e: Exception) { null }
+    }
+
+    suspend fun getDailyBonusRemaining(uid: String): Long = withContext(Dispatchers.IO) {
+        try {
+            val snap = db.collection(FirebaseConfig.COL_USERS).document(uid).get().await()
+            val last = snap.getLong("dailyBonusTs") ?: 0L
+            val cooldown = 24L * 3600L
+            val elapsed = nowSec() - last
+            (cooldown - elapsed).coerceAtLeast(0L)
+        } catch (e: Exception) { 0L }
+    }
+
+    // ============================================================
+    //  REFERRAL
+    // ============================================================
+    suspend fun applyReferralCode(newUid: String, code: String): Result<ReferralResult> =
+        withContext(Dispatchers.IO) {
+            try {
+                val cleanedCode = code.trim().uppercase()
+                if (cleanedCode.isEmpty()) return@withContext Result.failure(Exception("Empty code"))
+                val userRef = db.collection(FirebaseConfig.COL_USERS).document(newUid)
+                val userSnap = userRef.get().await()
+                if (!userSnap.exists()) return@withContext Result.failure(Exception("User not found"))
+                val alreadyReferred = userSnap.getString("referredBy")
+                if (!alreadyReferred.isNullOrBlank()) {
+                    return@withContext Result.failure(Exception("Already used a referral code"))
+                }
+                val referrerQuery = db.collection(FirebaseConfig.COL_USERS)
+                    .whereEqualTo("referCode", cleanedCode)
+                    .limit(1).get().await()
+                if (referrerQuery.isEmpty) return@withContext Result.failure(Exception("Invalid referral code"))
+                val referrerDoc = referrerQuery.documents.first()
+                val referrerUid = referrerDoc.id
+                if (referrerUid == newUid) return@withContext Result.failure(Exception("Cannot refer yourself"))
+                val settings = getGlobalSettings()
+                val rc = settings.refCredits
+                val rcoin = settings.refCoins
+                db.runTransaction { txn ->
+                    val freshSnap = txn.get(userRef)
+                    val freshReferred = freshSnap.getString("referredBy")
+                    if (!freshReferred.isNullOrBlank()) throw IllegalStateException("ALREADY_REFERRED")
+                    txn.update(
+                        userRef,
+                        "credits", FieldValue.increment(rc.toLong()),
+                        "coins", FieldValue.increment(rcoin.toLong()),
+                        "referredBy", referrerUid,
+                    )
+                    txn.update(
+                        referrerDoc.reference,
+                        "credits", FieldValue.increment(rc.toLong()),
+                        "coins", FieldValue.increment(rcoin.toLong()),
+                    )
+                }.await()
+                logTransaction(newUid, "referral_bonus", rc, "referred-by-$referrerUid")
+                logTransaction(referrerUid, "referral_bonus", rc, "referred-$newUid")
+                Result.success(ReferralResult(referrerUid, rc, rcoin))
+            } catch (e: Exception) { Result.failure(e) }
+        }
+
+    suspend fun getReferralCount(uid: String): Int = withContext(Dispatchers.IO) {
+        try {
+            db.collection(FirebaseConfig.COL_USERS)
+                .whereEqualTo("referredBy", uid)
+                .get().await().size()
+        } catch (e: Exception) { 0 }
+    }
+
+    // ============================================================
+    //  SOFT DELETE ACCOUNT
+    // ============================================================
+    /**
+     * Soft-delete a user account:
+     *  1. Reads user doc
+     *  2. Snapshots to deleted_accounts/{uid} with deletion metadata
+     *  3. Deletes users/{uid}
+     *  4. Releases any device_locks that point to this uid
+     *  History collections (blasts, otp_fetches, transactions, etc.) stay with uid
+     *  so admin can still search.
+     */
+    suspend fun softDeleteUser(
+        uid: String,
+        deletedBy: String,
+        reason: String = "self-deleted",
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val userRef = db.collection(FirebaseConfig.COL_USERS).document(uid)
+            val snap = userRef.get().await()
+            if (!snap.exists()) return@withContext false
+            val data = snap.data ?: emptyMap()
+
+            // Find device fingerprint if present
+            val deviceInfo = data["deviceInfo"] as? Map<*, *>
+            val fingerprint = (deviceInfo?.get("fingerprint") as? String) ?: ""
+
+            val deleted = DeletedAccount(
+                uid = uid,
+                email = data["email"] as? String ?: "",
+                displayName = data["displayName"] as? String ?: "",
+                username = data["username"] as? String ?: "",
+                role = data["role"] as? String ?: "user",
+                credits = (data["credits"] as? Number)?.toInt() ?: 0,
+                coins = (data["coins"] as? Number)?.toInt() ?: 0,
+                totalBlasts = (data["totalBlasts"] as? Number)?.toInt() ?: 0,
+                totalSms = (data["totalSms"] as? Number)?.toInt() ?: 0,
+                totalOtps = (data["totalOtps"] as? Number)?.toInt() ?: 0,
+                createdAt = (data["createdAt"] as? Number)?.toLong() ?: 0L,
+                lastActive = (data["lastActive"] as? Number)?.toLong() ?: 0L,
+                deletedAt = nowSec(),
+                deletedBy = deletedBy,
+                reason = reason,
+                deviceFingerprint = fingerprint,
+                snapshot = data,
+            )
+
+            // 1. Write to deleted_accounts
+            db.collection(FirebaseConfig.COL_DELETED_ACCOUNTS).document(uid).set(
+                mapOf(
+                    "uid" to deleted.uid,
+                    "email" to deleted.email,
+                    "displayName" to deleted.displayName,
+                    "username" to deleted.username,
+                    "role" to deleted.role,
+                    "credits" to deleted.credits.toLong(),
+                    "coins" to deleted.coins.toLong(),
+                    "totalBlasts" to deleted.totalBlasts.toLong(),
+                    "totalSms" to deleted.totalSms.toLong(),
+                    "totalOtps" to deleted.totalOtps.toLong(),
+                    "createdAt" to deleted.createdAt,
+                    "lastActive" to deleted.lastActive,
+                    "deletedAt" to deleted.deletedAt,
+                    "deletedBy" to deleted.deletedBy,
+                    "reason" to deleted.reason,
+                    "deviceFingerprint" to deleted.deviceFingerprint,
+                    "snapshot" to deleted.snapshot,
+                )
+            ).await()
+
+            // 2. Delete user doc
+            userRef.delete().await()
+
+            // 3. Release device lock
+            if (fingerprint.isNotBlank()) {
+                try {
+                    db.collection(FirebaseConfig.COL_DEVICE_LOCKS)
+                        .document(fingerprint)
+                        .delete().await()
+                } catch (_: Exception) {}
+            }
+
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun listDeletedAccounts(limit: Long = 200): List<DeletedAccount> =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_DELETED_ACCOUNTS)
+                    .limit(limit)
+                    .get().await()
+                    .documents.mapNotNull { d ->
+                        try {
+                            DeletedAccount(
+                                uid = d.getString("uid") ?: d.id,
+                                email = d.getString("email") ?: "",
+                                displayName = d.getString("displayName") ?: "",
+                                username = d.getString("username") ?: "",
+                                role = d.getString("role") ?: "user",
+                                credits = (d.getLong("credits") ?: 0L).toInt(),
+                                coins = (d.getLong("coins") ?: 0L).toInt(),
+                                totalBlasts = (d.getLong("totalBlasts") ?: 0L).toInt(),
+                                totalSms = (d.getLong("totalSms") ?: 0L).toInt(),
+                                totalOtps = (d.getLong("totalOtps") ?: 0L).toInt(),
+                                createdAt = d.getLong("createdAt") ?: 0L,
+                                lastActive = d.getLong("lastActive") ?: 0L,
+                                deletedAt = d.getLong("deletedAt") ?: 0L,
+                                deletedBy = d.getString("deletedBy") ?: "",
+                                reason = d.getString("reason") ?: "",
+                                deviceFingerprint = d.getString("deviceFingerprint") ?: "",
+                                snapshot = (d.get("snapshot") as? Map<*, *>)?.entries
+                                    ?.associate { it.key.toString() to it.value } ?: emptyMap(),
+                            )
+                        } catch (_: Exception) { null }
+                    }
+                    .sortedByDescending { it.deletedAt }
+            } catch (e: Exception) { emptyList() }
+        }
+
+    suspend fun getDeletedAccount(uid: String): DeletedAccount? = withContext(Dispatchers.IO) {
+        try {
+            val snap = db.collection(FirebaseConfig.COL_DELETED_ACCOUNTS).document(uid).get().await()
+            if (!snap.exists()) return@withContext null
+            DeletedAccount(
+                uid = snap.getString("uid") ?: uid,
+                email = snap.getString("email") ?: "",
+                displayName = snap.getString("displayName") ?: "",
+                username = snap.getString("username") ?: "",
+                role = snap.getString("role") ?: "user",
+                credits = (snap.getLong("credits") ?: 0L).toInt(),
+                coins = (snap.getLong("coins") ?: 0L).toInt(),
+                totalBlasts = (snap.getLong("totalBlasts") ?: 0L).toInt(),
+                totalSms = (snap.getLong("totalSms") ?: 0L).toInt(),
+                totalOtps = (snap.getLong("totalOtps") ?: 0L).toInt(),
+                createdAt = snap.getLong("createdAt") ?: 0L,
+                lastActive = snap.getLong("lastActive") ?: 0L,
+                deletedAt = snap.getLong("deletedAt") ?: 0L,
+                deletedBy = snap.getString("deletedBy") ?: "",
+                reason = snap.getString("reason") ?: "",
+                deviceFingerprint = snap.getString("deviceFingerprint") ?: "",
+                snapshot = (snap.get("snapshot") as? Map<*, *>)?.entries
+                    ?.associate { it.key.toString() to it.value } ?: emptyMap(),
+            )
+        } catch (e: Exception) { null }
+    }
+
+    // ============================================================
+    //  ACCOUNT ANALYSIS — inactive / dead / duplicate
+    // ============================================================
+    suspend fun analyzeAccounts(): Pair<List<AnalyzedUser>, List<AnalyzedUser>> =
+        withContext(Dispatchers.IO) {
+            val now = nowSec()
+            val inactiveCutoff = now - TimeUnit.DAYS.toSeconds(30)
+            val minAgeForDead = now - TimeUnit.DAYS.toSeconds(7)
+
+            val inactive = mutableListOf<AnalyzedUser>()
+            val dead = mutableListOf<AnalyzedUser>()
+
+            try {
+                val users = db.collection(FirebaseConfig.COL_USERS)
+                    .limit(5000)
+                    .get().await()
+                    .documents
+
+                for (doc in users) {
+                    val data = doc.data ?: continue
+                    val role = data["role"] as? String ?: "user"
+                    // Skip admin-tier accounts from dead/inactive lists
+                    if (role == "owner" || role == "super_admin" || role == "admin") continue
+
+                    val lastActive = (data["lastActive"] as? Number)?.toLong() ?: 0L
+                    val createdAt = (data["createdAt"] as? Number)?.toLong() ?: 0L
+                    val totalSms = (data["totalSms"] as? Number)?.toInt() ?: 0
+                    val totalOtps = (data["totalOtps"] as? Number)?.toInt() ?: 0
+                    val totalBlasts = (data["totalBlasts"] as? Number)?.toInt() ?: 0
+
+                    val deviceInfo = data["deviceInfo"] as? Map<*, *>
+                    val fp = (deviceInfo?.get("fingerprint") as? String) ?: ""
+
+                    val daysInactive = if (lastActive > 0) {
+                        ((now - lastActive) / TimeUnit.DAYS.toSeconds(1)).toInt()
+                    } else if (createdAt > 0) {
+                        ((now - createdAt) / TimeUnit.DAYS.toSeconds(1)).toInt()
+                    } else 9999
+
+                    val daysOld = if (createdAt > 0) {
+                        ((now - createdAt) / TimeUnit.DAYS.toSeconds(1)).toInt()
+                    } else 0
+
+                    val analyzed = AnalyzedUser(
+                        uid = doc.id,
+                        email = data["email"] as? String ?: "",
+                        displayName = data["displayName"] as? String ?: "",
+                        username = data["username"] as? String ?: "",
+                        role = role,
+                        credits = (data["credits"] as? Number)?.toInt() ?: 0,
+                        coins = (data["coins"] as? Number)?.toInt() ?: 0,
+                        totalBlasts = totalBlasts,
+                        totalSms = totalSms,
+                        totalOtps = totalOtps,
+                        createdAt = createdAt,
+                        lastActive = lastActive,
+                        banned = data["banned"] as? Boolean ?: false,
+                        deviceFingerprint = fp,
+                        daysInactive = daysInactive,
+                        daysOld = daysOld,
+                    )
+
+                    // inactive: no activity in 30 days
+                    val refTime = if (lastActive > 0) lastActive else createdAt
+                    if (refTime in 1 until inactiveCutoff) {
+                        inactive.add(analyzed)
+                    }
+
+                    // dead: never sent anything AND account > 7 days old
+                    if (totalSms == 0 && totalOtps == 0 && totalBlasts == 0 &&
+                        createdAt in 1 until minAgeForDead
+                    ) {
+                        dead.add(analyzed)
+                    }
+                }
+            } catch (_: Exception) {}
+
+            inactive.sortedByDescending { it.daysInactive } to
+                    dead.sortedByDescending { it.daysOld }
+        }
+
+    /**
+     * Find duplicate accounts — more than one uid per device fingerprint.
+     */
+    suspend fun findDuplicateGroups(): List<DuplicateGroup> = withContext(Dispatchers.IO) {
+        try {
+            // Primary source: device_locks collection (already enforces 1:1 for new users)
+            val locks = db.collection(FirebaseConfig.COL_DEVICE_LOCKS).get().await().documents
+            val fpToUid = mutableMapOf<String, String>()
+            for (l in locks) {
+                val fp = l.id
+                val uid = l.getString("uid") ?: continue
+                if (fp.isBlank() || uid.isBlank()) continue
+                fpToUid[fp] = uid
+            }
+
+            // Secondary: scan users with deviceInfo.fingerprint — catches legacy accounts
+            val usersSnap = db.collection(FirebaseConfig.COL_USERS).limit(5000).get().await().documents
+            val fpToUsers = mutableMapOf<String, MutableList<AnalyzedUser>>()
+
+            for (doc in usersSnap) {
+                val data = doc.data ?: continue
+                val deviceInfo = data["deviceInfo"] as? Map<*, *> ?: continue
+                val fp = (deviceInfo["fingerprint"] as? String) ?: continue
+                if (fp.isBlank()) continue
+                val role = data["role"] as? String ?: "user"
+                if (role == "owner" || role == "super_admin") continue
+
+                val analyzed = AnalyzedUser(
+                    uid = doc.id,
+                    email = data["email"] as? String ?: "",
+                    displayName = data["displayName"] as? String ?: "",
+                    username = data["username"] as? String ?: "",
+                    role = role,
+                    credits = (data["credits"] as? Number)?.toInt() ?: 0,
+                    coins = (data["coins"] as? Number)?.toInt() ?: 0,
+                    totalBlasts = (data["totalBlasts"] as? Number)?.toInt() ?: 0,
+                    totalSms = (data["totalSms"] as? Number)?.toInt() ?: 0,
+                    totalOtps = (data["totalOtps"] as? Number)?.toInt() ?: 0,
+                    createdAt = (data["createdAt"] as? Number)?.toLong() ?: 0L,
+                    lastActive = (data["lastActive"] as? Number)?.toLong() ?: 0L,
+                    banned = data["banned"] as? Boolean ?: false,
+                    deviceFingerprint = fp,
+                )
+                fpToUsers.getOrPut(fp) { mutableListOf() }.add(analyzed)
+            }
+
+            fpToUsers.entries
+                .filter { it.value.size > 1 }
+                .map { (fp, users) ->
+                    DuplicateGroup(
+                        fingerprint = fp,
+                        users = users.sortedBy { it.createdAt },
+                    )
+                }
+                .sortedByDescending { it.users.size }
+        } catch (e: Exception) { emptyList() }
+    }
+
+    // ============================================================
+    //  MISC
+    // ============================================================
+    suspend fun getUserDocField(uid: String, field: String): Any? = withContext(Dispatchers.IO) {
+        try {
+            val snap = db.collection(FirebaseConfig.COL_USERS).document(uid).get().await()
+            if (!snap.exists()) return@withContext null
+            snap.get(field)
+        } catch (e: Exception) { null }
+    }
+
+    suspend fun updateLastActive(uid: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_USERS).document(uid)
+                    .update("lastActive", nowSec()).await()
+            } catch (_: Exception) {}
+        }
     }
 
     private fun nowSec(): Long = System.currentTimeMillis() / 1000L
-
-    // PART 1 ENDS HERE — Part 2 of this file continues in next message
 }
