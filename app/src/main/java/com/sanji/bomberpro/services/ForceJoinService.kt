@@ -8,10 +8,20 @@ import com.sanji.bomberpro.FirebaseConfig
 import com.sanji.bomberpro.data.ForceJoinChannel
 import com.sanji.bomberpro.data.ForceJoinState
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
+/**
+ * Force-join gating.
+ *
+ * MODE: SELF-ATTEST (bot optional)
+ *  - User taps JOIN on each channel → opens Telegram
+ *  - User taps "I'VE JOINED ALL" → we immediately mark verified. No 20s wait.
+ *  - A deployed bot MAY later verify and set forceJoinMemberOf. If it finds
+ *    the user didn't actually join, it can flip forceJoinVerified=false
+ *    (admin can also reset).
+ *  - Priority is: instant access, no friction.
+ */
 class ForceJoinService {
 
     private val db = FirebaseFirestore.getInstance()
@@ -86,7 +96,7 @@ class ForceJoinService {
     }
 
     // ============================================================
-    //  CURRENT USER FLAG
+    //  USER STATUS
     // ============================================================
     suspend fun isUserVerified(uid: String): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -109,68 +119,79 @@ class ForceJoinService {
     }
 
     // ============================================================
-    //  REQUEST VERIFICATION — self-attest when no bot responds
+    //  INSTANT VERIFY — tap "I've joined" → access
     // ============================================================
+    /**
+     * Called when user taps "I'VE JOINED ALL".
+     *
+     * Immediately:
+     *   1. Writes `forceJoinVerified=true` to user doc
+     *   2. Records timestamp + self-attest flag
+     *   3. Queues a `join_check_requests` doc for any deployed bot
+     *      to optionally validate async (result ignored for access)
+     *
+     * Returns success in <200ms. No polling. No timeout.
+     */
     suspend fun requestVerification(
         uid: String,
         userName: String,
-        timeoutSeconds: Int = 20,
+        timeoutSeconds: Int = 0, // kept for API compat, ignored
     ): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
-            // Write the check request — a running bot (if deployed) will pick this up
-            val reqRef = db.collection("join_check_requests").document()
-            reqRef.set(
-                mapOf(
-                    "uid" to uid,
-                    "userName" to userName,
-                    "requestedAt" to System.currentTimeMillis() / 1000L,
-                    "status" to "pending",
-                ),
-                SetOptions.merge(),
-            ).await()
+            if (uid.isBlank()) return@withContext Result.failure(Exception("Missing uid"))
 
-            val deadline = System.currentTimeMillis() + timeoutSeconds * 1000L
+            val now = System.currentTimeMillis() / 1000L
 
-            while (System.currentTimeMillis() < deadline) {
-                delay(2000)
+            // Instant mark — self-attest
+            db.collection(FirebaseConfig.COL_USERS).document(uid)
+                .update(
+                    mapOf(
+                        "forceJoinVerified" to true,
+                        "forceJoinVerifiedAt" to now,
+                        "forceJoinSelfClaimed" to true,
+                    )
+                ).await()
 
-                // Check if bot already marked us verified
-                val userSnap = db.collection(FirebaseConfig.COL_USERS).document(uid).get().await()
-                val verified = userSnap.getBoolean("forceJoinVerified") ?: false
-                if (verified) {
-                    try { reqRef.update("status", "verified").await() } catch (_: Exception) {}
-                    return@withContext Result.success(true)
-                }
-
-                // Check if bot rejected the request
-                val reqSnap = reqRef.get().await()
-                val reqStatus = reqSnap.getString("status") ?: "pending"
-                if (reqStatus == "rejected") {
-                    return@withContext Result.success(false)
-                }
-            }
-
-            // No bot responded within timeout — self-attest so user can proceed.
-            // A deployed bot or admin can later flip forceJoinVerified back to false.
+            // Async check queue — a deployed bot MAY verify or revoke
             try {
-                db.collection(FirebaseConfig.COL_USERS).document(uid)
-                    .update(
-                        "forceJoinVerified", true,
-                        "forceJoinVerifiedAt", System.currentTimeMillis() / 1000L,
-                        "forceJoinSelfClaimed", true,
-                    ).await()
-                reqRef.update("status", "self_attested").await()
-            } catch (e: Exception) {
-                Log.w(TAG, "self-attest write failed", e)
-                // Still let user in — but next launch they'll re-hit the gate
-            }
+                val reqRef = db.collection("join_check_requests").document()
+                reqRef.set(
+                    mapOf(
+                        "uid" to uid,
+                        "userName" to userName.take(64),
+                        "requestedAt" to now,
+                        "status" to "self_attested",
+                        "source" to "app-tap",
+                    ),
+                    SetOptions.merge(),
+                ).await()
+            } catch (_: Exception) {}
 
             Result.success(true)
         } catch (e: Exception) {
             Log.w(TAG, "requestVerification failed", e)
-            Result.failure(e)
+            // Fail-open — allow access, retry next launch
+            Result.success(true)
         }
     }
+
+    /**
+     * Admin / bot may revoke self-attested verification if user didn't actually join.
+     */
+    suspend fun revokeVerification(uid: String, reason: String = ""): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                db.collection(FirebaseConfig.COL_USERS).document(uid)
+                    .update(
+                        mapOf(
+                            "forceJoinVerified" to false,
+                            "forceJoinRevokedAt" to System.currentTimeMillis() / 1000L,
+                            "forceJoinRevokeReason" to reason.take(200),
+                        )
+                    ).await()
+                true
+            } catch (_: Exception) { false }
+        }
 
     // ============================================================
     //  LIST MISSING CHANNELS
