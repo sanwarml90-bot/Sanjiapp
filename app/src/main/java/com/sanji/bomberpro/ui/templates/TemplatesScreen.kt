@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -49,6 +49,9 @@ import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.services.MessageTemplate
 import com.sanji.bomberpro.services.TemplateService
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.launch
 
 @Composable
@@ -73,6 +76,12 @@ fun TemplatesScreen(
     }
 
     LaunchedEffect(Unit) { refresh() }
+    LaunchedEffect(error) {
+        if (error != null) {
+            kotlinx.coroutines.delay(4000)
+            error = null
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().background(colors.background).padding(16.dp),
@@ -82,7 +91,7 @@ fun TemplatesScreen(
                 Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
             }
             Text(
-                "Templates",
+                "${SanjiEmoji.MESSAGE} Templates",
                 fontSize = 18.sp, fontWeight = FontWeight.Bold,
                 color = colors.onBackground, modifier = Modifier.weight(1f),
             )
@@ -103,7 +112,7 @@ fun TemplatesScreen(
         if (templates.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("📝", fontSize = 48.sp)
+                    Text(SanjiEmoji.MESSAGE, fontSize = 48.sp)
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "No templates yet",
@@ -123,18 +132,19 @@ fun TemplatesScreen(
                             containerColor = colors.primary,
                             contentColor = Color.Black,
                         ),
-                    ) { Text("Create Template") }
+                        modifier = Modifier.pressScale(),
+                    ) { Text("${SanjiEmoji.ADD} Create Template") }
                 }
             }
             return
         }
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(templates) { tpl ->
+            itemsIndexed(templates) { idx, tpl ->
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = colors.surface,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = idx * 40),
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -175,7 +185,6 @@ fun TemplatesScreen(
         }
     }
 
-    // create dialog
     if (showCreate) {
         TemplateEditDialog(
             title = "New Template",
@@ -196,7 +205,6 @@ fun TemplatesScreen(
         )
     }
 
-    // edit dialog
     val editing = editingTemplate
     if (editing != null) {
         TemplateEditDialog(
