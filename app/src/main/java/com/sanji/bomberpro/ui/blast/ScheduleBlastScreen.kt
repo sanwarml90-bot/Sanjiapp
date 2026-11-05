@@ -1,5 +1,10 @@
 package com.sanji.bomberpro.ui.blast
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,7 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -43,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -54,6 +60,9 @@ import com.sanji.bomberpro.services.BlastSpeed
 import com.sanji.bomberpro.services.ScheduledBlast
 import com.sanji.bomberpro.services.SchedulerService
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -66,6 +75,27 @@ private fun fmt(ts: Long): String =
 
 private enum class SchedView { LIST, CREATE }
 
+private fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+    return try {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        pm.isIgnoringBatteryOptimizations(context.packageName)
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun requestIgnoreBatteryOptimizations(context: Context) {
+    try {
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+        intent.data = Uri.parse("package:${context.packageName}")
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        try {
+            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        } catch (_: Exception) {}
+    }
+}
+
 @Composable
 fun ScheduleBlastScreen(
     uid: String,
@@ -74,6 +104,7 @@ fun ScheduleBlastScreen(
     onBack: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val service = remember { SchedulerService() }
 
@@ -82,6 +113,7 @@ fun ScheduleBlastScreen(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf<String?>(null) }
+    var batteryOptimized by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
 
     var target by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
@@ -116,6 +148,11 @@ fun ScheduleBlastScreen(
         }
     }
 
+    // Re-check battery optimization status when returning from settings
+    LaunchedEffect(view) {
+        batteryOptimized = isIgnoringBatteryOptimizations(context)
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(colors.background)) {
         if (view == SchedView.LIST) {
             Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -124,7 +161,7 @@ fun ScheduleBlastScreen(
                         Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
                     }
                     Text(
-                        "Scheduled Blasts",
+                        "${SanjiEmoji.CLOCK} Scheduled Blasts",
                         fontSize = 18.sp, fontWeight = FontWeight.Bold,
                         color = colors.onBackground, modifier = Modifier.weight(1f),
                     )
@@ -138,6 +175,62 @@ fun ScheduleBlastScreen(
 
                 Spacer(Modifier.height(12.dp))
 
+                // Battery optimization banner
+                if (!batteryOptimized) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = colors.warning.copy(alpha = 0.15f),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp).fadeSlideIn(delayMs = 0),
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(SanjiEmoji.BATTERY, fontSize = 18.sp)
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "Allow background running",
+                                    fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                    color = colors.onBackground,
+                                )
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "Scheduled blasts fire only while the app is alive. Disable battery optimization so your schedule runs on time.",
+                                fontSize = 11.sp, color = colors.onSurfaceVariant,
+                                lineHeight = 15.sp,
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            Button(
+                                onClick = {
+                                    requestIgnoreBatteryOptimizations(context)
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = colors.primary,
+                                    contentColor = Color.Black,
+                                ),
+                                modifier = Modifier.height(40.dp).pressScale(),
+                            ) {
+                                Text("Allow in Settings", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = colors.success.copy(alpha = 0.10f),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    ) {
+                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(SanjiEmoji.SUCCESS, fontSize = 14.sp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "Background running enabled",
+                                fontSize = 12.sp, color = colors.success, fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+
                 if (loading) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = colors.primary)
@@ -145,7 +238,7 @@ fun ScheduleBlastScreen(
                 } else if (schedules.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("⏰", fontSize = 48.sp)
+                            Text(SanjiEmoji.CLOCK, fontSize = 48.sp)
                             Spacer(Modifier.height(8.dp))
                             Text("No scheduled blasts", fontSize = 14.sp, color = colors.onSurfaceVariant)
                             Spacer(Modifier.height(12.dp))
@@ -154,17 +247,22 @@ fun ScheduleBlastScreen(
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = colors.primary, contentColor = Color.Black,
                                 ),
-                            ) { Text("Schedule a Blast") }
+                                modifier = Modifier.pressScale(),
+                            ) { Text("${SanjiEmoji.ADD} Schedule a Blast") }
                         }
                     }
                 } else {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(schedules) { s ->
-                            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+                        itemsIndexed(schedules) { idx, s ->
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = colors.surface,
+                                modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = idx * 40),
+                            ) {
                                 Column(Modifier.padding(12.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
-                                            "⏰ ${fmt(s.scheduledAt)}",
+                                            "${SanjiEmoji.CLOCK} ${fmt(s.scheduledAt)}",
                                             fontSize = 13.sp, fontWeight = FontWeight.Bold,
                                             color = colors.onBackground, modifier = Modifier.weight(1f),
                                         )
@@ -182,12 +280,12 @@ fun ScheduleBlastScreen(
                                         }
                                     }
                                     Text(
-                                        "📞 ${s.target}",
+                                        "${SanjiEmoji.PHONE} ${s.target}",
                                         fontSize = 12.sp, color = colors.onBackground,
                                         fontFamily = FontFamily.Monospace,
                                     )
                                     Text(
-                                        "💬 ${s.message.take(60)}${if (s.message.length > 60) "…" else ""}",
+                                        "${SanjiEmoji.MESSAGE} ${s.message.take(60)}${if (s.message.length > 60) "…" else ""}",
                                         fontSize = 11.sp, color = colors.onSurfaceVariant,
                                     )
                                     Text(
@@ -214,13 +312,39 @@ fun ScheduleBlastScreen(
                         Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
                     }
                     Text(
-                        "Schedule Blast",
+                        "${SanjiEmoji.ADD} Schedule Blast",
                         fontSize = 18.sp, fontWeight = FontWeight.Bold,
                         color = colors.onBackground, modifier = Modifier.weight(1f),
                     )
                 }
 
                 Spacer(Modifier.height(12.dp))
+
+                // Battery banner in create view too
+                if (!batteryOptimized) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = colors.warning.copy(alpha = 0.15f),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                "${SanjiEmoji.WARNING} Battery optimization is ON",
+                                fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                                color = colors.onBackground,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Schedule might not fire if app is killed. Tap below to allow background.",
+                                fontSize = 11.sp, color = colors.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            TextButton(onClick = { requestIgnoreBatteryOptimizations(context) }) {
+                                Text("Allow in Settings", color = colors.primary, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
 
                 Text("Target number", fontSize = 12.sp, color = colors.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
@@ -267,7 +391,7 @@ fun ScheduleBlastScreen(
                             onClick = { power = p },
                             shape = RoundedCornerShape(10.dp),
                             color = if (power == p) colors.primary.copy(alpha = 0.15f) else colors.surface,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).pressScale(),
                         ) {
                             Text(
                                 "${p}x",
@@ -290,7 +414,7 @@ fun ScheduleBlastScreen(
                             onClick = { speed = s },
                             shape = RoundedCornerShape(10.dp),
                             color = if (speed == s) colors.primary.copy(alpha = 0.15f) else colors.surface,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).pressScale(),
                         ) {
                             Text(
                                 s.label,
@@ -374,7 +498,7 @@ fun ScheduleBlastScreen(
                         }
                     },
                     enabled = !submitting,
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colors.primary, contentColor = Color.Black,
