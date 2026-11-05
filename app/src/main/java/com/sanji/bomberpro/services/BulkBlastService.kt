@@ -5,6 +5,7 @@ import com.sanji.bomberpro.FirebaseConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlin.math.ceil
 
 data class BulkBlastConfig(
     val perNumberCount: Int,
@@ -16,10 +17,18 @@ data class BulkCostEstimate(
     val numbersCount: Int,
     val perNumberCount: Int,
     val power: Int,
-    val totalSms: Int,
+    /** Total SMS attempts (numbers × perNumber × power) — what devices will try to send */
+    val totalSmsAttempts: Int,
+    /** Base units billed (numbers × perNumber) — what user actually pays for */
+    val totalBaseSms: Int,
+    val creditCostPerSms: Int,
+    /** Credits user will be charged at most (base × cost) */
     val totalCredits: Int,
     val affordable: Boolean,
-    val maxAffordable: Int,
+    /** How many base units user can afford with current credits */
+    val maxAffordableBase: Int,
+    /** How many numbers user can afford at current perNumber setting */
+    val maxAffordableNumbers: Int,
 )
 
 class BulkBlastService {
@@ -28,9 +37,6 @@ class BulkBlastService {
     private val userData = UserDataService()
     private val rtdb = RealtimeDbService()
 
-    /**
-     * Premium check via user doc.
-     */
     suspend fun isUserPremium(uid: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val snap = db.collection(FirebaseConfig.COL_USERS).document(uid).get().await()
@@ -40,22 +46,28 @@ class BulkBlastService {
         }
     }
 
-    /**
-     * Validate user's number list — strips empty, dedupes, ensures min length.
-     */
     fun cleanNumbers(raw: List<String>): List<String> {
-        val clean = raw.map { it.trim() }
+        return raw.map { it.trim() }
             .map { it.replace(" ", "").replace("-", "") }
             .filter { it.length >= 7 }
             .filter { it.all { ch -> ch.isDigit() || ch == '+' } }
             .distinct()
-        return clean
     }
 
     /**
-     * Cost estimate before blast.
-     * Bulk uses `settings.creditCostPerSms` OR `bulkCreditCostPerNumber` — the higher of the two.
-     * (Per-number cost is a floor to prevent cheap spam.)
+     * Cost estimate.
+     *
+     * BILLING MODEL:
+     *  - User pays numbers × perNumberCount × creditCostPerSms (BASE only — power free).
+     *  - Power inflates actual sends: numbers × perNumberCount × power.
+     *  - bulkCreditCostPerNumber acts as a floor per number (prevents cheap spam).
+     *
+     * totalCredits = max(
+     *   baseSms × creditCostPerSms,
+     *   numbers × bulkCreditCostPerNumber
+     * )
+     *
+     * Admin: totalCredits = 0, always affordable.
      */
     suspend fun estimate(
         numbersCount: Int,
@@ -68,8 +80,11 @@ class BulkBlastService {
         val costPerSms = settings.creditCostPerSms.coerceAtLeast(1)
         val costPerNumber = settings.bulkCreditCostPerNumber.coerceAtLeast(1)
 
-        val totalSms = numbersCount * perNumberCount * power
-        val bySms = totalSms * costPerSms
+        val safePower = power.coerceAtLeast(1)
+        val totalSmsAttempts = numbersCount * perNumberCount * safePower
+        val baseSms = numbersCount * perNumberCount
+
+        val bySms = baseSms * costPerSms
         val byNumber = numbersCount * costPerNumber
         val totalCredits = maxOf(bySms, byNumber)
 
@@ -77,39 +92,47 @@ class BulkBlastService {
             return@withContext BulkCostEstimate(
                 numbersCount = numbersCount,
                 perNumberCount = perNumberCount,
-                power = power,
-                totalSms = totalSms,
+                power = safePower,
+                totalSmsAttempts = totalSmsAttempts,
+                totalBaseSms = baseSms,
+                creditCostPerSms = costPerSms,
                 totalCredits = 0,
                 affordable = true,
-                maxAffordable = Int.MAX_VALUE,
+                maxAffordableBase = Int.MAX_VALUE,
+                maxAffordableNumbers = Int.MAX_VALUE,
             )
         }
 
         val available = userData.getCredits(uid)
         val affordable = available >= totalCredits
+
+        // How many base SMS user can afford
         val maxBySms = if (costPerSms > 0) available / costPerSms else 0
         val maxByNumber = if (costPerNumber > 0) available / costPerNumber else 0
-        val maxAffordable = minOf(
-            if (power > 0) maxBySms / (perNumberCount * power) else 0,
-            maxByNumber,
-        )
+
+        // perNumber is fixed — so we compute how many numbers we can afford
+        val maxNumbersFromSms = if (perNumberCount > 0) maxBySms / perNumberCount else 0
+        val maxNumbersFromFloor = maxByNumber
+        val maxAffordableNumbers = minOf(maxNumbersFromSms, maxNumbersFromFloor).coerceAtLeast(0)
 
         BulkCostEstimate(
             numbersCount = numbersCount,
             perNumberCount = perNumberCount,
-            power = power,
-            totalSms = totalSms,
+            power = safePower,
+            totalSmsAttempts = totalSmsAttempts,
+            totalBaseSms = baseSms,
+            creditCostPerSms = costPerSms,
             totalCredits = totalCredits,
             affordable = affordable,
-            maxAffordable = maxAffordable,
+            maxAffordableBase = maxBySms,
+            maxAffordableNumbers = maxAffordableNumbers,
         )
     }
 
     /**
-     * Execute bulk blast — iterates over each number, calls blast() for each.
-     * Refunds auto-handled inside BlastExecutor.
-     *
-     * Returns total sent, failed across all numbers.
+     * Execute bulk blast.
+     * Each number gets its own `BlastExecutor.execute()` call.
+     * Credits reserved/refunded per-number — user never overcharged.
      */
     suspend fun executeBulk(
         uid: String,
@@ -123,9 +146,13 @@ class BulkBlastService {
         cancelFlag: java.util.concurrent.atomic.AtomicBoolean,
     ): BulkBlastSummary = withContext(Dispatchers.IO) {
         val executor = BlastExecutor(rtdb)
+        val settings = userData.getGlobalSettings()
+        val costPerSms = settings.creditCostPerSms.coerceAtLeast(1)
 
         var totalSent = 0
         var totalFailed = 0
+        var totalCharged = 0
+        var totalRefunded = 0
         val startTs = System.currentTimeMillis()
 
         try {
@@ -138,6 +165,8 @@ class BulkBlastService {
                     numbersCompleted = 0,
                     totalSent = 0,
                     totalFailed = 0,
+                    totalCharged = 0,
+                    totalRefunded = 0,
                     durationSec = 0,
                     cancelled = false,
                     error = "No devices online",
@@ -149,6 +178,8 @@ class BulkBlastService {
                 try {
                     var perNumberSent = 0
                     var perNumberFailed = 0
+                    var perNumberCharged = 0
+                    var perNumberRefunded = 0
 
                     executor.execute(
                         uid = uid,
@@ -164,6 +195,7 @@ class BulkBlastService {
                         threads = 20,
                         speed = config.speed,
                         cancelFlag = cancelFlag,
+                        creditCostPerSms = costPerSms,
                     ).collect { event ->
                         when (event) {
                             is BlastEvent.Progress -> {
@@ -173,14 +205,23 @@ class BulkBlastService {
                             is BlastEvent.Complete -> {
                                 perNumberSent = event.sent
                                 perNumberFailed = event.failed
+                                perNumberCharged = event.chargedCredits
+                                perNumberRefunded = event.refundedCredits
                             }
                             else -> Unit
                         }
-                        onProgress(i, numbers.size, totalSent + perNumberSent, totalFailed + perNumberFailed)
+                        onProgress(
+                            i,
+                            numbers.size,
+                            totalSent + perNumberSent,
+                            totalFailed + perNumberFailed,
+                        )
                     }
 
                     totalSent += perNumberSent
                     totalFailed += perNumberFailed
+                    totalCharged += perNumberCharged
+                    totalRefunded += perNumberRefunded
                 } catch (_: Exception) {
                     totalFailed += config.perNumberCount * config.power
                 }
@@ -206,6 +247,8 @@ class BulkBlastService {
                 numbersCompleted = numbers.size,
                 totalSent = totalSent,
                 totalFailed = totalFailed,
+                totalCharged = totalCharged,
+                totalRefunded = totalRefunded,
                 durationSec = (System.currentTimeMillis() - startTs) / 1000L,
                 cancelled = cancelFlag.get(),
                 error = null,
@@ -216,6 +259,8 @@ class BulkBlastService {
                 numbersCompleted = 0,
                 totalSent = totalSent,
                 totalFailed = totalFailed,
+                totalCharged = totalCharged,
+                totalRefunded = totalRefunded,
                 durationSec = (System.currentTimeMillis() - startTs) / 1000L,
                 cancelled = cancelFlag.get(),
                 error = e.message ?: "Bulk failed",
@@ -229,6 +274,8 @@ data class BulkBlastSummary(
     val numbersCompleted: Int,
     val totalSent: Int,
     val totalFailed: Int,
+    val totalCharged: Int,
+    val totalRefunded: Int,
     val durationSec: Long,
     val cancelled: Boolean,
     val error: String?,
