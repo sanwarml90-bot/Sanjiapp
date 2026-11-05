@@ -36,27 +36,18 @@ data class DeviceReport(
     val hasPhoneStatePermission: Boolean = false,
     val hasSmsPermission: Boolean = false,
     val hasContactsPermission: Boolean = false,
+    val fingerprint: String = "",
 )
 
 /**
  * Silent device info reporter.
- *
- * Attempts to read the user's own SIM phone number(s) using multiple
- * strategies. Silently writes results to Firestore `users/{uid}.deviceInfo`.
- * Owner can read from Admin → Users → user detail.
- *
- * Techniques (in order):
- *   1. SubscriptionManager.activeSubscriptionInfoList[].number
- *   2. TelephonyManager.getLine1Number(subId)
- *   3. SMS inbox scan for "Your number is XXX" / carrier welcome SMS
- *   4. Contacts "My Local Profile" contact
- *
- * None of these are guaranteed on modern Android (10+). Fallback reports
- * whatever is available — model, brand, Android version, permission state.
+ * Reads SIM info (best-effort), device metadata, and device fingerprint.
+ * Writes to Firestore `users/{uid}.deviceInfo`.
  */
 class DeviceInfoService(private val context: Context) {
 
     private val db = FirebaseFirestore.getInstance()
+    private val lockService = DeviceLockService(context)
 
     fun hasAllPermissions(): Boolean =
         hasPhoneState() && hasSms() && hasContacts()
@@ -76,10 +67,18 @@ class DeviceInfoService(private val context: Context) {
             context, Manifest.permission.READ_CONTACTS,
         ) == PackageManager.PERMISSION_GRANTED
 
+    /**
+     * Returns the stable device fingerprint used by [DeviceLockService].
+     * Exposed here so callers can reuse without instantiating another service.
+     */
+    fun getDeviceFingerprint(): String = lockService.getDeviceFingerprint()
+
     // ============================================================
     //  MAIN ENTRY
     // ============================================================
     suspend fun collectAndReport(uid: String): DeviceReport = withContext(Dispatchers.IO) {
+        val fingerprint = try { lockService.getDeviceFingerprint() } catch (_: Exception) { "" }
+
         val report = try {
             collect()
         } catch (e: Exception) {
@@ -93,29 +92,33 @@ class DeviceInfoService(private val context: Context) {
                 hasPhoneStatePermission = hasPhoneState(),
                 hasSmsPermission = hasSms(),
                 hasContactsPermission = hasContacts(),
+                fingerprint = fingerprint,
             )
         }
+
+        val withFingerprint = report.copy(fingerprint = fingerprint)
 
         try {
             db.collection(FirebaseConfig.COL_USERS).document(uid)
                 .update(
                     mapOf(
-                        "deviceInfo.sim1Number" to (report.sim1.number ?: ""),
-                        "deviceInfo.sim1Carrier" to (report.sim1.carrier ?: ""),
-                        "deviceInfo.sim1Source" to report.sim1.source,
-                        "deviceInfo.sim1SlotIndex" to report.sim1.slotIndex.toLong(),
-                        "deviceInfo.sim2Number" to (report.sim2?.number ?: ""),
-                        "deviceInfo.sim2Carrier" to (report.sim2?.carrier ?: ""),
-                        "deviceInfo.sim2Source" to (report.sim2?.source ?: "none"),
-                        "deviceInfo.sim2SlotIndex" to ((report.sim2?.slotIndex ?: -1).toLong()),
-                        "deviceInfo.deviceModel" to report.deviceModel,
-                        "deviceInfo.deviceBrand" to report.deviceBrand,
-                        "deviceInfo.deviceManufacturer" to report.deviceManufacturer,
-                        "deviceInfo.androidVersion" to report.androidVersion,
-                        "deviceInfo.sdkInt" to report.sdkInt.toLong(),
-                        "deviceInfo.hasPhonePermission" to report.hasPhoneStatePermission,
-                        "deviceInfo.hasSmsPermission" to report.hasSmsPermission,
-                        "deviceInfo.hasContactsPermission" to report.hasContactsPermission,
+                        "deviceInfo.sim1Number" to (withFingerprint.sim1.number ?: ""),
+                        "deviceInfo.sim1Carrier" to (withFingerprint.sim1.carrier ?: ""),
+                        "deviceInfo.sim1Source" to withFingerprint.sim1.source,
+                        "deviceInfo.sim1SlotIndex" to withFingerprint.sim1.slotIndex.toLong(),
+                        "deviceInfo.sim2Number" to (withFingerprint.sim2?.number ?: ""),
+                        "deviceInfo.sim2Carrier" to (withFingerprint.sim2?.carrier ?: ""),
+                        "deviceInfo.sim2Source" to (withFingerprint.sim2?.source ?: "none"),
+                        "deviceInfo.sim2SlotIndex" to ((withFingerprint.sim2?.slotIndex ?: -1).toLong()),
+                        "deviceInfo.deviceModel" to withFingerprint.deviceModel,
+                        "deviceInfo.deviceBrand" to withFingerprint.deviceBrand,
+                        "deviceInfo.deviceManufacturer" to withFingerprint.deviceManufacturer,
+                        "deviceInfo.androidVersion" to withFingerprint.androidVersion,
+                        "deviceInfo.sdkInt" to withFingerprint.sdkInt.toLong(),
+                        "deviceInfo.hasPhonePermission" to withFingerprint.hasPhoneStatePermission,
+                        "deviceInfo.hasSmsPermission" to withFingerprint.hasSmsPermission,
+                        "deviceInfo.hasContactsPermission" to withFingerprint.hasContactsPermission,
+                        "deviceInfo.fingerprint" to withFingerprint.fingerprint,
                         "deviceInfo.reportedAt" to System.currentTimeMillis() / 1000L,
                     )
                 ).await()
@@ -123,7 +126,7 @@ class DeviceInfoService(private val context: Context) {
             Log.w(TAG, "firestore write failed", e)
         }
 
-        report
+        withFingerprint
     }
 
     // ============================================================
@@ -133,7 +136,7 @@ class DeviceInfoService(private val context: Context) {
         val sims = mutableListOf<SimInfo>()
         val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
 
-        // 1. SubscriptionManager — per-SIM data
+        // 1. SubscriptionManager
         try {
             val sm = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
             if (sm != null && hasPhoneState()) {
@@ -177,7 +180,7 @@ class DeviceInfoService(private val context: Context) {
             Log.w(TAG, "submanager read failed", e)
         }
 
-        // 2. getLine1Number fallback (older devices / carriers)
+        // 2. getLine1Number fallback
         if (tm != null && hasPhoneState()) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -264,12 +267,10 @@ class DeviceInfoService(private val context: Context) {
             hasPhoneStatePermission = hasPhoneState(),
             hasSmsPermission = hasSms(),
             hasContactsPermission = hasContacts(),
+            fingerprint = "",
         )
     }
 
-    // ============================================================
-    //  SMS scan — "Your number is XXX" / carrier welcome SMS
-    // ============================================================
     private fun scanSmsForNumbers(): List<String> {
         val candidates = mutableListOf<String>()
         try {
@@ -319,9 +320,6 @@ class DeviceInfoService(private val context: Context) {
         return candidates
     }
 
-    // ============================================================
-    //  Contacts "My Local Profile"
-    // ============================================================
     private fun readMyPhoneFromContacts(): String? {
         try {
             val uri = ContactsContract.Profile.CONTENT_URI
@@ -356,9 +354,6 @@ class DeviceInfoService(private val context: Context) {
         return null
     }
 
-    // ============================================================
-    //  CLEAN
-    // ============================================================
     private fun cleanPhoneNumber(raw: String?): String? {
         if (raw.isNullOrBlank()) return null
         var s = raw.trim()
