@@ -34,11 +34,13 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.sanji.bomberpro.data.AuthManager
 import com.sanji.bomberpro.data.AuthState
+import com.sanji.bomberpro.data.SpecialMessage
 import com.sanji.bomberpro.data.UserRole
 import com.sanji.bomberpro.services.AppLockService
 import com.sanji.bomberpro.services.DeviceInfoService
 import com.sanji.bomberpro.services.ForceJoinService
 import com.sanji.bomberpro.services.ForceUpdateService
+import com.sanji.bomberpro.services.SpecialMsgService
 import com.sanji.bomberpro.services.UpdateInfo
 import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.theme.LocalSanjiColors
@@ -59,6 +61,7 @@ import com.sanji.bomberpro.ui.notifications.NotificationsScreen
 import com.sanji.bomberpro.ui.permissions.PermissionGateScreen
 import com.sanji.bomberpro.ui.refer.ReferScreen
 import com.sanji.bomberpro.ui.settings.UserSettingsScreen
+import com.sanji.bomberpro.ui.special.SpecialMsgScreen
 import com.sanji.bomberpro.ui.splash.SplashScreen
 import com.sanji.bomberpro.ui.support.SupportScreen
 import com.sanji.bomberpro.ui.templates.TemplatesScreen
@@ -71,6 +74,7 @@ object Routes {
     const val SPLASH = "splash"
     const val LOGIN = "login"
     const val TERMS = "terms"
+    const val SPECIAL_MSG = "special_msg"
     const val FORCE_JOIN = "force_join"
     const val PERMISSIONS = "permissions"
     const val HOME = "home"
@@ -104,6 +108,7 @@ fun SanjiNavGraph(
     val deviceInfoService = remember { DeviceInfoService(context) }
     val appLockService = remember { AppLockService() }
     val forceUpdateService = remember { ForceUpdateService() }
+    val specialMsgService = remember { SpecialMsgService() }
     val scope = rememberCoroutineScope()
 
     var termsVersion by remember { mutableStateOf(1) }
@@ -112,6 +117,12 @@ fun SanjiNavGraph(
     var gateLoaded by remember { mutableStateOf(false) }
     var permissionsGranted by remember { mutableStateOf(false) }
     var userForceJoinOk by remember { mutableStateOf(false) }
+
+    // Special msg
+    var specialMsgEnabled by remember { mutableStateOf(false) }
+    var specialMsgVersion by remember { mutableStateOf(0) }
+    var pendingSpecialMsg by remember { mutableStateOf<SpecialMessage?>(null) }
+    var needsSpecialMsg by remember { mutableStateOf(false) }
 
     var appLocked by remember { mutableStateOf(false) }
     var appLockMessage by remember { mutableStateOf("") }
@@ -135,6 +146,8 @@ fun SanjiNavGraph(
         val logged = authState as? AuthState.LoggedIn
         if (logged == null) {
             gateLoaded = false
+            needsSpecialMsg = false
+            pendingSpecialMsg = null
             return@LaunchedEffect
         }
         gateLoaded = false
@@ -162,12 +175,15 @@ fun SanjiNavGraph(
             termsVersion = s.termsVersion
             termsRequired = s.termsRequired
             forceJoinEnabled = s.forceJoinEnabled
+            specialMsgEnabled = s.specialMsgEnabled
+            specialMsgVersion = s.specialMsgVersion
         } catch (_: Exception) {
             termsRequired = true
             forceJoinEnabled = false
+            specialMsgEnabled = false
+            specialMsgVersion = 0
         }
 
-        // Admin+ roles never blocked by force join
         try {
             userForceJoinOk = when {
                 !forceJoinEnabled -> true
@@ -178,6 +194,27 @@ fun SanjiNavGraph(
         } catch (_: Exception) {
             userForceJoinOk = !forceJoinEnabled ||
                     logged.role.priority >= UserRole.ADMIN.priority
+        }
+
+        // Load special msg
+        try {
+            val userSeen = logged.profile?.specialMsgVersionSeen ?: 0
+            if (specialMsgEnabled && specialMsgVersion > userSeen) {
+                val msg = specialMsgService.getActiveMessage()
+                if (msg != null && msg.enabled && msg.version > userSeen) {
+                    pendingSpecialMsg = msg
+                    needsSpecialMsg = true
+                } else {
+                    pendingSpecialMsg = null
+                    needsSpecialMsg = false
+                }
+            } else {
+                pendingSpecialMsg = null
+                needsSpecialMsg = false
+            }
+        } catch (_: Exception) {
+            pendingSpecialMsg = null
+            needsSpecialMsg = false
         }
 
         gateLoaded = true
@@ -215,6 +252,7 @@ fun SanjiNavGraph(
             authState = authState,
             gateLoaded = gateLoaded,
             needsTerms = needsTerms,
+            needsSpecialMsg = needsSpecialMsg,
             userForceJoinOk = userForceJoinOk,
             forceJoinEnabled = forceJoinEnabled,
             permissionsGranted = permissionsGranted,
@@ -274,7 +312,7 @@ fun SanjiNavGraph(
         return
     }
 
-    LaunchedEffect(authState, gateLoaded, needsTerms, forceJoinEnabled, userForceJoinOk, permissionsGranted, appLocked) {
+    LaunchedEffect(authState, gateLoaded, needsTerms, needsSpecialMsg, forceJoinEnabled, userForceJoinOk, permissionsGranted, appLocked) {
         val logged = authState as? AuthState.LoggedIn ?: return@LaunchedEffect
         if (!gateLoaded) return@LaunchedEffect
         if (appLocked) return@LaunchedEffect
@@ -287,6 +325,7 @@ fun SanjiNavGraph(
 
         val target = when {
             needsTerms -> Routes.TERMS
+            needsSpecialMsg -> Routes.SPECIAL_MSG
             forceJoinEnabled && !userForceJoinOk -> Routes.FORCE_JOIN
             !permissionsGranted -> Routes.PERMISSIONS
             else -> Routes.HOME
@@ -317,6 +356,7 @@ fun SanjiNavGraph(
                                 authState = authState,
                                 gateLoaded = gateLoaded,
                                 needsTerms = needsTerms,
+                                needsSpecialMsg = needsSpecialMsg,
                                 userForceJoinOk = userForceJoinOk,
                                 forceJoinEnabled = forceJoinEnabled,
                                 permissionsGranted = permissionsGranted,
@@ -348,7 +388,32 @@ fun SanjiNavGraph(
                             termsVersion = s.termsVersion
                             termsRequired = s.termsRequired
                             forceJoinEnabled = s.forceJoinEnabled
+                            specialMsgEnabled = s.specialMsgEnabled
+                            specialMsgVersion = s.specialMsgVersion
+
+                            // Check special msg after terms
+                            try {
+                                val userSeen = loggedIn?.profile?.specialMsgVersionSeen ?: 0
+                                if (specialMsgEnabled && specialMsgVersion > userSeen) {
+                                    val msg = specialMsgService.getActiveMessage()
+                                    if (msg != null && msg.enabled && msg.version > userSeen) {
+                                        pendingSpecialMsg = msg
+                                        needsSpecialMsg = true
+                                    } else {
+                                        pendingSpecialMsg = null
+                                        needsSpecialMsg = false
+                                    }
+                                } else {
+                                    pendingSpecialMsg = null
+                                    needsSpecialMsg = false
+                                }
+                            } catch (_: Exception) {
+                                pendingSpecialMsg = null
+                                needsSpecialMsg = false
+                            }
+
                             val next = when {
+                                needsSpecialMsg -> Routes.SPECIAL_MSG
                                 forceJoinEnabled && !userForceJoinOk -> Routes.FORCE_JOIN
                                 !permissionsGranted -> Routes.PERMISSIONS
                                 else -> Routes.HOME
@@ -359,6 +424,38 @@ fun SanjiNavGraph(
                     onDeclined = {
                         authManager.signOut()
                         navController.navigate(Routes.LOGIN) { popUpTo(0) { inclusive = true } }
+                    },
+                )
+            }
+        }
+
+        composable(Routes.SPECIAL_MSG) {
+            val msg = pendingSpecialMsg
+            if (loggedIn == null || msg == null) {
+                // No message — skip forward
+                LaunchedEffect(Unit) {
+                    val next = when {
+                        forceJoinEnabled && !userForceJoinOk -> Routes.FORCE_JOIN
+                        !permissionsGranted -> Routes.PERMISSIONS
+                        else -> Routes.HOME
+                    }
+                    navController.navigate(next) { popUpTo(Routes.SPECIAL_MSG) { inclusive = true } }
+                }
+            } else {
+                SpecialMsgScreen(
+                    uid = loggedIn.user.uid,
+                    message = msg,
+                    onDismiss = {
+                        needsSpecialMsg = false
+                        pendingSpecialMsg = null
+                        // Refresh profile so seen version reflects
+                        authManager.refreshProfile()
+                        val next = when {
+                            forceJoinEnabled && !userForceJoinOk -> Routes.FORCE_JOIN
+                            !permissionsGranted -> Routes.PERMISSIONS
+                            else -> Routes.HOME
+                        }
+                        navController.navigate(next) { popUpTo(Routes.SPECIAL_MSG) { inclusive = true } }
                     },
                 )
             }
@@ -572,6 +669,7 @@ private fun computeInitialRoute(
     authState: AuthState,
     gateLoaded: Boolean,
     needsTerms: Boolean,
+    needsSpecialMsg: Boolean,
     userForceJoinOk: Boolean,
     forceJoinEnabled: Boolean,
     permissionsGranted: Boolean,
@@ -582,6 +680,7 @@ private fun computeInitialRoute(
         is AuthState.LoggedIn -> when {
             !gateLoaded -> Routes.SPLASH
             needsTerms -> Routes.TERMS
+            needsSpecialMsg -> Routes.SPECIAL_MSG
             forceJoinEnabled && !userForceJoinOk -> Routes.FORCE_JOIN
             !permissionsGranted -> Routes.PERMISSIONS
             else -> Routes.HOME
@@ -589,6 +688,7 @@ private fun computeInitialRoute(
         is AuthState.LoggedOut -> Routes.LOGIN
         is AuthState.Initializing -> Routes.SPLASH
         is AuthState.Error -> Routes.LOGIN
+        is AuthState.DeviceLocked -> Routes.LOGIN
     }
 }
 
@@ -615,7 +715,7 @@ private fun ForceUpdateBlockingOverlay(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    "⚠️ Update Required",
+                    "${com.sanji.bomberpro.ui.components.SanjiEmoji.WARNING} Update Required",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Black,
                     color = colors.error,
@@ -647,7 +747,11 @@ private fun ForceUpdateBlockingOverlay(
                         contentColor = Color.Black,
                     ),
                 ) {
-                    Text("⬇️ Update Now", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(
+                        "${com.sanji.bomberpro.ui.components.SanjiEmoji.DOWNLOAD} Update Now",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                    )
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
