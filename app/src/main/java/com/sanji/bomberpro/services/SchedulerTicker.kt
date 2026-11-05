@@ -51,6 +51,10 @@ class SchedulerTicker(private val scope: CoroutineScope) {
         val due = schedulerService.getDueSchedules()
         if (due.isEmpty()) return
 
+        // Read settings once per tick — cost per SMS + scan firebases
+        val settings = userData.getGlobalSettings()
+        val costPerSms = settings.creditCostPerSms.coerceAtLeast(1)
+
         val devices = try {
             val fbs = rtdb.loadFirebases()
             rtdb.scanAll(fbs)
@@ -61,7 +65,7 @@ class SchedulerTicker(private val scope: CoroutineScope) {
         for (schedule in due) {
             if (!running.compareAndSet(false, true)) return
             try {
-                fireSchedule(schedule, devices)
+                fireSchedule(schedule, devices, costPerSms)
             } catch (e: Exception) {
                 Log.w(TAG, "fire failed: ${schedule.id}", e)
             } finally {
@@ -73,10 +77,10 @@ class SchedulerTicker(private val scope: CoroutineScope) {
     private suspend fun fireSchedule(
         schedule: ScheduledBlast,
         devices: List<Device>,
+        costPerSms: Int,
     ) {
         if (!schedulerService.markRunning(schedule.id)) return
 
-        // direct user doc read
         val userDoc = try {
             db.collection(FirebaseConfig.COL_USERS).document(schedule.uid).get().await()
         } catch (e: Exception) {
@@ -112,6 +116,7 @@ class SchedulerTicker(private val scope: CoroutineScope) {
         val executor = BlastExecutor(rtdb)
         var sentTotal = 0
         var failedTotal = 0
+        var chargedTotal = 0
         var refundedTotal = 0
         var errorMsg: String? = null
 
@@ -131,11 +136,13 @@ class SchedulerTicker(private val scope: CoroutineScope) {
                 threads = 20,
                 speed = speedEnum,
                 cancelFlag = cancelFlag,
+                creditCostPerSms = costPerSms,
             ).collect { event ->
                 when (event) {
                     is BlastEvent.Complete -> {
                         sentTotal = event.sent
                         failedTotal = event.failed
+                        chargedTotal = event.chargedCredits
                         refundedTotal = event.refundedCredits
                     }
                     is BlastEvent.Error -> {
@@ -160,6 +167,7 @@ class SchedulerTicker(private val scope: CoroutineScope) {
                     "scheduleId" to schedule.id,
                     "sent" to sentTotal,
                     "failed" to failedTotal,
+                    "charged" to chargedTotal,
                     "refunded" to refundedTotal,
                     "error" to (errorMsg ?: ""),
                 ),
