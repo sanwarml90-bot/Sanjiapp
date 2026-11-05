@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -65,6 +65,10 @@ import com.sanji.bomberpro.services.OtpService
 import com.sanji.bomberpro.services.RealtimeDbService
 import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
+import com.sanji.bomberpro.ui.components.pulse
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -164,7 +168,6 @@ fun OtpScreen(
             IconButton(onClick = {
                 if (view == OtpView.LIST) onBack()
                 else if (view == OtpView.LIVE) {
-                    // stopping live when navigating back
                     liveRunning = false
                     liveJob?.cancel()
                     liveJob = null
@@ -199,12 +202,16 @@ fun OtpScreen(
         ) {
             Text(
                 text = when (view) {
-                    OtpView.LIST -> "Get OTP"
-                    OtpView.DETAIL -> "Device"
-                    OtpView.RESULT -> if (lastMode == "new") "NEW OTPs" else if (lastMode == "old") "OLD OTPs" else "Messages"
-                    OtpView.LIVE -> "Live Mode"
-                    OtpView.FAVS -> "Favorites"
-                    OtpView.KEYWORD -> "Keyword Watch"
+                    OtpView.LIST -> "${SanjiEmoji.OTP} Get OTP"
+                    OtpView.DETAIL -> "${SanjiEmoji.DEVICE} Device"
+                    OtpView.RESULT -> when (lastMode) {
+                        "new" -> "${SanjiEmoji.NEW} NEW OTPs"
+                        "old" -> "${SanjiEmoji.HISTORY} OLD OTPs"
+                        else -> "${SanjiEmoji.MESSAGE} Messages"
+                    }
+                    OtpView.LIVE -> "${SanjiEmoji.BOLT} Live Mode"
+                    OtpView.FAVS -> "${SanjiEmoji.STAR} Favorites"
+                    OtpView.KEYWORD -> "${SanjiEmoji.BELL} Keyword Watch"
                 },
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
@@ -219,7 +226,7 @@ fun OtpScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "🪙 $coins",
+                        text = "${SanjiEmoji.COINS} $coins",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = colors.primary,
@@ -263,7 +270,6 @@ fun OtpScreen(
                                     val all = otpService.collectAll(dv)
 
                                     if (found.isNotEmpty()) {
-                                        // success — deduct coins if not admin
                                         if (!isAdmin) {
                                             if (coins < otpCost) {
                                                 error = "Need $otpCost coins (have $coins)"
@@ -296,7 +302,6 @@ fun OtpScreen(
                                             cost = if (isAdmin) 0 else otpCost,
                                         )
                                     } else {
-                                        // no OTP — no deduction, no refund needed
                                         error = null
                                     }
 
@@ -584,14 +589,14 @@ private fun DeviceListSection(
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = if (devices.isEmpty()) "No devices online" else "No matches",
+                    text = if (devices.isEmpty()) "${SanjiEmoji.NETWORK} No devices online" else "No matches",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.onBackground,
                 )
                 Spacer(Modifier.height(8.dp))
                 TextButton(onClick = onRefresh) {
-                    Text("Refresh", color = colors.primary)
+                    Text("${SanjiEmoji.REFRESH} Refresh", color = colors.primary)
                 }
             }
         }
@@ -599,32 +604,40 @@ private fun DeviceListSection(
     }
 
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(filtered) { dv ->
-            DeviceCard(device = dv, onClick = { onSelect(dv) })
+        itemsIndexed(filtered) { idx, dv ->
+            DeviceCard(
+                device = dv,
+                modifier = Modifier.fadeSlideIn(delayMs = idx * 40),
+                onClick = { onSelect(dv) },
+            )
         }
     }
 }
 
 @Composable
-private fun DeviceCard(device: Device, onClick: () -> Unit) {
+private fun DeviceCard(device: Device, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val colors = LocalSanjiColors.current
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(14.dp),
         color = colors.surface,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().pressScale(),
     ) {
         Row(
             modifier = Modifier.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = device.deviceName.ifBlank { "Unknown device" },
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colors.onBackground,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(SanjiEmoji.DEVICE, fontSize = 14.sp)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = device.deviceName.ifBlank { "Unknown device" },
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.onBackground,
+                    )
+                }
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = device.phone ?: "no number",
@@ -635,7 +648,7 @@ private fun DeviceCard(device: Device, onClick: () -> Unit) {
                 Spacer(Modifier.height(2.dp))
                 Row {
                     Text(
-                        text = "🔑 ${device.shortId}",
+                        text = "${SanjiEmoji.KEY} ${device.shortId}",
                         fontSize = 10.sp,
                         color = colors.primary,
                         fontFamily = FontFamily.Monospace,
@@ -643,7 +656,7 @@ private fun DeviceCard(device: Device, onClick: () -> Unit) {
                     if (device.battery != null) {
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = "🔋${device.battery}%",
+                            text = "${SanjiEmoji.BATTERY}${device.battery}%",
                             fontSize = 10.sp,
                             color = colors.onSurfaceVariant,
                         )
@@ -686,25 +699,25 @@ private fun DeviceDetailSection(
         }
 
         ActionRow(
-            label = "🆕 NEW — today's OTPs",
+            label = "${SanjiEmoji.NEW} NEW — today's OTPs",
             detail = "Fresh from midnight IST · costs $otpCost coins on success",
             enabled = !loading,
             onClick = onFetchNew,
         )
         ActionRow(
-            label = "📜 OLD — all OTPs",
+            label = "${SanjiEmoji.HISTORY} OLD — all OTPs",
             detail = "Every OTP available · costs $otpCost coins on success",
             enabled = !loading,
             onClick = onFetchOld,
         )
         ActionRow(
-            label = "⏱ LIVE — watch for new",
+            label = "${SanjiEmoji.BOLT} LIVE — watch for new",
             detail = "Polls every 4s · costs $otpCost coins per new OTP",
             enabled = !loading,
             onClick = onLive,
         )
         ActionRow(
-            label = "📬 Last messages",
+            label = "${SanjiEmoji.MESSAGE} Last messages",
             detail = "Free · preview last 300 messages",
             enabled = !loading,
             onClick = onMessages,
@@ -743,7 +756,7 @@ private fun ActionRow(
         shape = RoundedCornerShape(14.dp),
         color = colors.surface,
         enabled = enabled,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().pressScale(),
     ) {
         Column(Modifier.padding(14.dp)) {
             Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
@@ -767,7 +780,7 @@ private fun FetchResultSection(
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = if (mode == "msgs") "No messages" else "No OTPs found",
+                    text = if (mode == "msgs") "${SanjiEmoji.MESSAGE} No messages" else "${SanjiEmoji.OTP} No OTPs found",
                     fontSize = 14.sp,
                     color = colors.onBackground,
                 )
@@ -793,16 +806,20 @@ private fun FetchResultSection(
     }
 
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(messages) { m ->
-            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface) {
+        itemsIndexed(messages) { idx, m ->
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = colors.surface,
+                modifier = Modifier.fadeSlideIn(delayMs = idx * 30),
+            ) {
                 Column(Modifier.padding(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             if (m.otps.isNotEmpty()) {
                                 Text(
                                     text = m.otps.joinToString(", "),
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Black,
                                     color = colors.primary,
                                     fontFamily = FontFamily.Monospace,
                                 )
@@ -811,12 +828,12 @@ private fun FetchResultSection(
                             }
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                text = "📤 ${m.sender}",
+                                text = "${SanjiEmoji.RECEIVE} ${m.sender}",
                                 fontSize = 12.sp,
                                 color = colors.onBackground,
                             )
                             Text(
-                                text = "🕐 ${formatIstShort(m.ts)}",
+                                text = "${SanjiEmoji.CLOCK} ${formatIstShort(m.ts)}",
                                 fontSize = 11.sp,
                                 color = colors.onSurfaceVariant,
                             )
@@ -851,18 +868,33 @@ private fun LiveSection(
 ) {
     val colors = LocalSanjiColors.current
     Column(modifier = Modifier.fillMaxSize()) {
-        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = if (running) colors.primary.copy(alpha = 0.10f) else colors.surface,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (running) "🟢 Watching…" else "⏹ Stopped",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colors.primary,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (running) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .background(colors.success, androidx.compose.foundation.shape.CircleShape)
+                                    .pulse(0.5f, 1f),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Text(
+                            text = if (running) "Watching…" else "Stopped",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colors.primary,
+                        )
+                    }
                     Text(
                         "Poll every 4s · coins spent: $coinsSpent · left: $coinsLeft",
                         fontSize = 11.sp,
@@ -883,6 +915,7 @@ private fun LiveSection(
                             containerColor = colors.error,
                             contentColor = Color.White,
                         ),
+                        modifier = Modifier.pressScale(),
                     ) { Text("STOP") }
                 }
             }
@@ -893,6 +926,8 @@ private fun LiveSection(
         if (otps.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(SanjiEmoji.BOLT, fontSize = 42.sp)
+                    Spacer(Modifier.height(8.dp))
                     Text("Waiting for new OTPs…", color = colors.onSurfaceVariant, fontSize = 12.sp)
                     if (pauseReason != null) {
                         Spacer(Modifier.height(6.dp))
@@ -902,20 +937,24 @@ private fun LiveSection(
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(otps.reversed()) { m ->
-                    Surface(shape = RoundedCornerShape(14.dp), color = colors.surface) {
+                itemsIndexed(otps.reversed()) { idx, m ->
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = colors.surface,
+                        modifier = Modifier.fadeSlideIn(delayMs = idx * 30),
+                    ) {
                         Column(Modifier.padding(12.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
                                     Text(
                                         text = m.otps.joinToString(", "),
-                                        fontSize = 18.sp,
-                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.Black,
                                         color = colors.primary,
                                         fontFamily = FontFamily.Monospace,
                                     )
-                                    Text("📤 ${m.sender}", fontSize = 12.sp, color = colors.onBackground)
-                                    Text("🕐 ${formatIstFull(m.ts)}", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                                    Text("${SanjiEmoji.RECEIVE} ${m.sender}", fontSize = 12.sp, color = colors.onBackground)
+                                    Text("${SanjiEmoji.CLOCK} ${formatIstFull(m.ts)}", fontSize = 11.sp, color = colors.onSurfaceVariant)
                                 }
                                 if (m.otps.isNotEmpty()) {
                                     IconButton(onClick = { onCopy(m.otps.first()) }) {
@@ -947,13 +986,21 @@ private fun FavoritesSection(
     val colors = LocalSanjiColors.current
     if (favorites.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No favorites yet", color = colors.onSurfaceVariant, fontSize = 13.sp)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(SanjiEmoji.STAR, fontSize = 42.sp)
+                Spacer(Modifier.height(8.dp))
+                Text("No favorites yet", color = colors.onSurfaceVariant, fontSize = 13.sp)
+            }
         }
         return
     }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(favorites) { f ->
-            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface) {
+        itemsIndexed(favorites) { idx, f ->
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = colors.surface,
+                modifier = Modifier.fadeSlideIn(delayMs = idx * 40),
+            ) {
                 Row(
                     modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -966,8 +1013,8 @@ private fun FavoritesSection(
                             color = colors.primary,
                             fontFamily = FontFamily.Monospace,
                         )
-                        Text("📤 ${f.sender}", fontSize = 11.sp, color = colors.onBackground)
-                        Text("🕐 ${formatIstShort(f.savedAt)}", fontSize = 10.sp, color = colors.onSurfaceVariant)
+                        Text("${SanjiEmoji.RECEIVE} ${f.sender}", fontSize = 11.sp, color = colors.onBackground)
+                        Text("${SanjiEmoji.CLOCK} ${formatIstShort(f.savedAt)}", fontSize = 10.sp, color = colors.onSurfaceVariant)
                     }
                     IconButton(onClick = { onCopy(f.otp) }) {
                         Icon(Icons.Default.ContentCopy, "Copy", tint = colors.primary)
@@ -1005,7 +1052,7 @@ private fun KeywordSection(
         )
         Button(
             onClick = onSave,
-            modifier = Modifier.fillMaxWidth().height(50.dp),
+            modifier = Modifier.fillMaxWidth().height(50.dp).pressScale(),
             colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
         ) { Text("Save Keyword") }
         if (currentKeyword.isNotBlank()) {
