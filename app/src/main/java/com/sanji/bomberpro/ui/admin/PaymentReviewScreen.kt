@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -50,6 +50,9 @@ import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.data.PaymentRequest
 import com.sanji.bomberpro.services.AdminService
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -103,7 +106,7 @@ fun PaymentReviewScreen(
                     Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
                 }
                 Text(
-                    "Payment Review (${payments.size})",
+                    "${SanjiEmoji.CREDITS} Payments (${payments.size})",
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                     color = colors.onBackground, modifier = Modifier.weight(1f),
                 )
@@ -114,7 +117,7 @@ fun PaymentReviewScreen(
 
             Spacer(Modifier.height(8.dp))
             Text(
-                "Pending UPI payment requests. Approve credits the user directly. No Telegram bot needed.",
+                "Pending UPI payment requests. Approving credits the user instantly.",
                 fontSize = 11.sp, color = colors.onSurfaceVariant,
             )
             Spacer(Modifier.height(12.dp))
@@ -126,7 +129,7 @@ fun PaymentReviewScreen(
             } else if (payments.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("✅", fontSize = 48.sp)
+                        Text(SanjiEmoji.SUCCESS, fontSize = 48.sp)
                         Spacer(Modifier.height(8.dp))
                         Text("No pending payments", fontSize = 14.sp, color = colors.onSurfaceVariant)
                         Spacer(Modifier.height(4.dp))
@@ -139,9 +142,10 @@ fun PaymentReviewScreen(
                 }
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(payments) { p ->
+                    itemsIndexed(payments) { idx, p ->
                         PaymentCard(
                             p = p,
+                            modifier = Modifier.fadeSlideIn(delayMs = idx * 40),
                             onApprove = { showApprove = p },
                             onReject = {
                                 rejectReason = ""
@@ -194,7 +198,7 @@ fun PaymentReviewScreen(
             containerColor = colors.surface,
             titleContentColor = colors.onBackground,
             textContentColor = colors.onBackground,
-            title = { Text("Approve Payment?") },
+            title = { Text("${SanjiEmoji.SUCCESS} Approve Payment?") },
             text = {
                 Column {
                     Text(
@@ -206,10 +210,13 @@ fun PaymentReviewScreen(
                         "Item: ${if (toApprove.type == "subscription") toApprove.plan.uppercase() else "${toApprove.packName} (${toApprove.creditsAmount} credits)"}",
                         fontSize = 12.sp, color = colors.onBackground,
                     )
-                    Text("UTR: ${toApprove.utr}", fontSize = 11.sp, color = colors.primary, fontFamily = FontFamily.Monospace)
+                    Text(
+                        "${SanjiEmoji.KEY} UTR: ${toApprove.utr}",
+                        fontSize = 11.sp, color = colors.primary, fontFamily = FontFamily.Monospace,
+                    )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Verifying UTR against your bank statement is YOUR responsibility. This grants credits/subscription immediately.",
+                        "Verify UTR against your bank statement. This grants credits/subscription immediately.",
                         fontSize = 11.sp, color = colors.warning,
                     )
                 }
@@ -248,7 +255,7 @@ fun PaymentReviewScreen(
             containerColor = colors.surface,
             titleContentColor = colors.onBackground,
             textContentColor = colors.onBackground,
-            title = { Text("Reject Payment?") },
+            title = { Text("${SanjiEmoji.ERROR} Reject Payment?") },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
@@ -273,6 +280,7 @@ fun PaymentReviewScreen(
 @Composable
 private fun PaymentCard(
     p: PaymentRequest,
+    modifier: Modifier = Modifier,
     onApprove: () -> Unit,
     onReject: () -> Unit,
 ) {
@@ -280,18 +288,21 @@ private fun PaymentCard(
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = colors.surface,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("⏳", fontSize = 16.sp)
+                Text(SanjiEmoji.PENDING, fontSize = 16.sp)
                 Spacer(Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         "₹${p.amount} · ${if (p.type == "subscription") "subscription" else "credits"}",
                         fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
                     )
-                    Text(p.userName.ifBlank { "User" }, fontSize = 11.sp, color = colors.onSurfaceVariant, maxLines = 1)
+                    Text(
+                        p.userName.ifBlank { "User" },
+                        fontSize = 11.sp, color = colors.onSurfaceVariant, maxLines = 1,
+                    )
                     Text(
                         p.uid,
                         fontSize = 10.sp, color = colors.onSurfaceVariant,
@@ -308,8 +319,8 @@ private fun PaymentCard(
                     Row {
                         Text("Type: ", fontSize = 11.sp, color = colors.onSurfaceVariant)
                         Text(
-                            if (p.type == "subscription") "📦 ${p.plan.uppercase()}"
-                            else "💰 ${p.creditsAmount} credits",
+                            if (p.type == "subscription") "${SanjiEmoji.PREMIUM} ${p.plan.uppercase()}"
+                            else "${SanjiEmoji.CREDITS} ${p.creditsAmount} credits",
                             fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
                         )
                     }
@@ -320,7 +331,7 @@ private fun PaymentCard(
                         )
                     }
                     Text(
-                        "UTR: ${p.utr}",
+                        "${SanjiEmoji.KEY} UTR: ${p.utr}",
                         fontSize = 11.sp, fontWeight = FontWeight.Bold,
                         color = colors.primary, fontFamily = FontFamily.Monospace,
                     )
@@ -338,7 +349,7 @@ private fun PaymentCard(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = onApprove,
-                    modifier = Modifier.weight(1f).height(44.dp),
+                    modifier = Modifier.weight(1f).height(44.dp).pressScale(),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colors.success,
@@ -351,7 +362,7 @@ private fun PaymentCard(
                 }
                 Button(
                     onClick = onReject,
-                    modifier = Modifier.weight(1f).height(44.dp),
+                    modifier = Modifier.weight(1f).height(44.dp).pressScale(),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colors.error,
