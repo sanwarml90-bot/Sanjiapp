@@ -1,6 +1,6 @@
 package com.sanji.bomberpro.services
 
-import com.google.firebase.firestore.FieldValue
+import android.util.Log
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.sanji.bomberpro.FirebaseConfig
@@ -16,6 +16,30 @@ data class MessageTemplate(
     val createdAt: Long = 0L,
 )
 
+/**
+ * Message templates — stored in `users/{uid}/templates` subcollection.
+ *
+ * IMPORTANT: If Firestore rules do not allow writing to subcollections
+ * under `users/{uid}`, saves will fail. Rules must include:
+ *
+ *   match /users/{uid} {
+ *     allow read, write: if request.auth.uid == uid;
+ *     match /templates/{tid} {
+ *       allow read, write: if request.auth.uid == uid;
+ *     }
+ *   }
+ *
+ * Or a recursive wildcard:
+ *
+ *   match /users/{uid}/{document=**} {
+ *     allow read, write: if request.auth.uid == uid;
+ *   }
+ *
+ * If saving fails with permission-denied, that's the rules issue.
+ *
+ * All operations now throw / return errors so UI can display the real
+ * cause instead of silently returning empty.
+ */
 class TemplateService {
 
     private val db = FirebaseFirestore.getInstance()
@@ -24,20 +48,19 @@ class TemplateService {
         .document(uid)
         .collection("templates")
 
+    /**
+     * Returns list of templates. Throws on error so caller shows message.
+     */
     suspend fun listTemplates(uid: String): List<MessageTemplate> = withContext(Dispatchers.IO) {
-        try {
-            col(uid).orderBy("createdAt", Query.Direction.DESCENDING)
-                .get().await().documents.map { d ->
-                    MessageTemplate(
-                        id = d.id,
-                        uid = uid,
-                        name = d.getString("name") ?: "Template",
-                        text = d.getString("text") ?: "",
-                        createdAt = d.getLong("createdAt") ?: 0L,
-                    )
-                }
-        } catch (_: Exception) {
-            emptyList()
+        val snap = col(uid).orderBy("createdAt", Query.Direction.DESCENDING).get().await()
+        snap.documents.map { d ->
+            MessageTemplate(
+                id = d.id,
+                uid = uid,
+                name = d.getString("name") ?: "Template",
+                text = d.getString("text") ?: "",
+                createdAt = d.getLong("createdAt") ?: 0L,
+            )
         }
     }
 
@@ -59,7 +82,8 @@ class TemplateService {
                 ).await()
                 Result.success(ref.id)
             } catch (e: Exception) {
-                Result.failure(e)
+                Log.e(TAG, "saveTemplate failed", e)
+                Result.failure(Exception(e.message ?: "Save failed"))
             }
         }
 
@@ -72,7 +96,8 @@ class TemplateService {
                 ).await()
                 Result.success(Unit)
             } catch (e: Exception) {
-                Result.failure(e)
+                Log.e(TAG, "updateTemplate failed", e)
+                Result.failure(Exception(e.message ?: "Update failed"))
             }
         }
 
@@ -80,8 +105,13 @@ class TemplateService {
         try {
             col(uid).document(id).delete().await()
             true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteTemplate failed", e)
             false
         }
+    }
+
+    companion object {
+        private const val TAG = "TemplateService"
     }
 }
