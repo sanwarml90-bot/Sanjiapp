@@ -2,6 +2,10 @@ package com.sanji.bomberpro.ui.auth
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -36,6 +41,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -82,6 +89,17 @@ fun LoginScreen(
     var info by remember { mutableStateOf<String?>(null) }
     var deviceLockMessage by remember { mutableStateOf<String?>(null) }
 
+    // Entry logo animation
+    val logoScale = remember { Animatable(0.7f) }
+    val logoAlpha = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        logoAlpha.animateTo(1f, tween(300))
+        logoScale.animateTo(
+            targetValue = 1f,
+            animationSpec = spring(dampingRatio = 0.6f, stiffness = 220f),
+        )
+    }
+
     LaunchedEffect(authState) {
         when (val s = authState) {
             is AuthState.LoggedIn -> {
@@ -125,33 +143,67 @@ fun LoginScreen(
                 .padding(horizontal = 24.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(20.dp))
+
+            // Logo with glow
+            Box(
+                modifier = Modifier.size(90.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .alpha(logoAlpha.value * 0.25f)
+                        .background(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    colors.primary,
+                                    colors.primary.copy(alpha = 0.4f),
+                                    Color.Transparent,
+                                )
+                            ),
+                            shape = CircleShape,
+                        )
+                )
+                Text(
+                    text = "S",
+                    fontSize = 56.sp,
+                    fontWeight = FontWeight.Black,
+                    color = colors.primary,
+                    modifier = Modifier
+                        .alpha(logoAlpha.value)
+                        .scale(logoScale.value),
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Row(modifier = Modifier.fadeSlideIn(delayMs = 0), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "SANJI",
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Black,
+                    color = colors.onBackground,
+                    letterSpacing = (-0.5).sp,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "BOMBER",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.primary,
+                    letterSpacing = 4.sp,
+                )
+            }
+
+            Spacer(Modifier.height(4.dp))
 
             Text(
-                text = "SANJI BOMBER",
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Black,
-                color = colors.onBackground,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fadeSlideIn(delayMs = 0),
-            )
-            Text(
-                text = "PRO",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 10.sp,
-                color = colors.primary,
-                modifier = Modifier.fadeSlideIn(delayMs = 80),
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                text = "Fast. Private. Unlimited.",
+                text = "⚡ Fast. Private. Unlimited.",
                 fontSize = 12.sp,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.fadeSlideIn(delayMs = 160),
+                modifier = Modifier.fadeSlideIn(delayMs = 80),
             )
 
             Spacer(Modifier.height(24.dp))
@@ -161,7 +213,7 @@ fun LoginScreen(
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = colors.error.copy(alpha = 0.15f),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 100),
                 ) {
                     Column(Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -193,6 +245,7 @@ fun LoginScreen(
                             },
                             shape = RoundedCornerShape(10.dp),
                             color = colors.error,
+                            modifier = Modifier.pressScale(),
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
@@ -218,7 +271,8 @@ fun LoginScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(colors.surface, RoundedCornerShape(14.dp))
-                    .padding(4.dp),
+                    .padding(4.dp)
+                    .fadeSlideIn(delayMs = 120),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 ModeTab(
@@ -245,7 +299,7 @@ fun LoginScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // Google button — sign in only
+            // Google button (sign in only)
             if (mode == AuthMode.SIGN_IN) {
                 Button(
                     onClick = {
@@ -296,7 +350,8 @@ fun LoginScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)
-                        .pressScale(),
+                        .pressScale()
+                        .fadeSlideIn(delayMs = 160),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.White,
@@ -322,7 +377,7 @@ fun LoginScreen(
                 Spacer(Modifier.height(16.dp))
 
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 200),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     HorizontalDivider(
@@ -351,26 +406,24 @@ fun LoginScreen(
                     label = { Text("Username") },
                     placeholder = { Text("letters, numbers, _") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 220),
                     enabled = !loading,
                 )
                 Spacer(Modifier.height(10.dp))
             }
 
-            // Email
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it.trim() },
                 label = { Text("Email") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 240),
                 enabled = !loading,
             )
 
             Spacer(Modifier.height(10.dp))
 
-            // Password
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
@@ -378,13 +431,12 @@ fun LoginScreen(
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 280),
                 enabled = !loading,
             )
 
             Spacer(Modifier.height(16.dp))
 
-            // Submit
             Button(
                 onClick = {
                     error = null
@@ -429,7 +481,8 @@ fun LoginScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp)
-                    .pressScale(),
+                    .pressScale()
+                    .fadeSlideIn(delayMs = 320),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = colors.primary,
@@ -462,6 +515,7 @@ fun LoginScreen(
                 fontSize = 11.sp,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.fadeSlideIn(delayMs = 340),
             )
 
             if (error != null) {
@@ -488,7 +542,6 @@ fun LoginScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // Contact admin button
             Surface(
                 onClick = {
                     try {
@@ -504,7 +557,8 @@ fun LoginScreen(
                 color = colors.surface,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .pressScale(),
+                    .pressScale()
+                    .fadeSlideIn(delayMs = 380),
             ) {
                 Row(
                     modifier = Modifier.padding(vertical = 14.dp),
@@ -529,6 +583,7 @@ fun LoginScreen(
                 fontSize = 10.sp,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.fadeSlideIn(delayMs = 400),
             )
 
             Spacer(Modifier.height(24.dp))
@@ -548,7 +603,7 @@ private fun ModeTab(
         onClick = onClick,
         shape = RoundedCornerShape(10.dp),
         color = if (selected) colors.primary else Color.Transparent,
-        modifier = modifier,
+        modifier = modifier.pressScale(),
     ) {
         Box(
             contentAlignment = Alignment.Center,
