@@ -18,13 +18,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,6 +54,10 @@ import com.sanji.bomberpro.services.Referrer
 import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.AnimatedCounter
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.launch
 
 private const val APP_DOWNLOAD_URL = "https://github.com/Sanjiapp/sanji-bomber-pro/releases/latest"
@@ -111,7 +114,7 @@ fun ReferScreen(
     }
 
     fun buildShareText(): String {
-        return "Join Sanji Bomber Pro! 🔥\n\n" +
+        return "Join Sanji Bomber Pro! ${SanjiEmoji.FIRE}\n\n" +
                 "Use my referral code: $referCode\n" +
                 "You get +$refCredits credits + $refCoins coins\n\n" +
                 "Download: $APP_DOWNLOAD_URL"
@@ -155,7 +158,7 @@ fun ReferScreen(
                 Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
             }
             Text(
-                "Refer & Earn",
+                "${SanjiEmoji.GIFT} Refer & Earn",
                 fontSize = 20.sp, fontWeight = FontWeight.Bold,
                 color = colors.onBackground, modifier = Modifier.weight(1f),
             )
@@ -174,7 +177,7 @@ fun ReferScreen(
         Surface(
             shape = RoundedCornerShape(24.dp),
             color = Color.Transparent,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 0),
         ) {
             Box(
                 modifier = Modifier
@@ -183,11 +186,15 @@ fun ReferScreen(
                     .padding(20.dp),
             ) {
                 Column {
-                    Text(
-                        "YOUR REFERRAL CODE",
-                        fontSize = 10.sp, color = Color.Black.copy(alpha = 0.7f),
-                        fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(SanjiEmoji.GIFT, fontSize = 14.sp)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "YOUR REFERRAL CODE",
+                            fontSize = 10.sp, color = Color.Black.copy(alpha = 0.7f),
+                            fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
+                        )
+                    }
                     Spacer(Modifier.height(10.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -199,9 +206,9 @@ fun ReferScreen(
                         if (referCode.isNotBlank()) {
                             Surface(
                                 onClick = { copyToClipboard("Referral code", referCode) },
-                                shape = RoundedCornerShape(50),
+                                shape = CircleShape,
                                 color = Color.Black.copy(alpha = 0.15f),
-                                modifier = Modifier.size(38.dp),
+                                modifier = Modifier.size(38.dp).pressScale(),
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(Icons.Default.ContentCopy, "Copy", tint = Color.Black, modifier = Modifier.size(18.dp))
@@ -222,37 +229,58 @@ fun ReferScreen(
 
         // Stats
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 80),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.weight(1f)) {
                 Column(Modifier.padding(14.dp)) {
-                    Text("Total Referred", fontSize = 11.sp, color = colors.onSurfaceVariant)
                     Text(
-                        "$referCount", fontSize = 22.sp, fontWeight = FontWeight.Black,
+                        "${SanjiEmoji.USERS} Total Referred",
+                        fontSize = 11.sp, color = colors.onSurfaceVariant,
+                    )
+                    AnimatedCounter(
+                        value = referCount,
+                        style = androidx.compose.ui.text.TextStyle(fontSize = 22.sp),
                         color = colors.primary,
+                        fontWeight = FontWeight.Black,
                     )
                 }
             }
             Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.weight(1f)) {
                 Column(Modifier.padding(14.dp)) {
-                    Text("Total Earned", fontSize = 11.sp, color = colors.onSurfaceVariant)
                     Text(
-                        "${referCount * refCredits}💰",
-                        fontSize = 22.sp, fontWeight = FontWeight.Black,
-                        color = colors.success,
+                        "${SanjiEmoji.CREDITS} Total Earned",
+                        fontSize = 11.sp, color = colors.onSurfaceVariant,
                     )
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        AnimatedCounter(
+                            value = referCount * refCredits,
+                            style = androidx.compose.ui.text.TextStyle(fontSize = 22.sp),
+                            color = colors.success,
+                            fontWeight = FontWeight.Black,
+                        )
+                        Text(
+                            SanjiEmoji.CREDITS,
+                            fontSize = 12.sp,
+                            color = colors.success,
+                            modifier = Modifier.padding(bottom = 3.dp, start = 2.dp),
+                        )
+                    }
                 }
             }
         }
 
         Spacer(Modifier.height(16.dp))
 
-        // Top Referrers Leaderboard
-        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+        // Leaderboard
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = colors.surface,
+            modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 140),
+        ) {
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("🏆", fontSize = 20.sp)
+                    Text(SanjiEmoji.TROPHY, fontSize = 20.sp)
                     Spacer(Modifier.width(8.dp))
                     Text(
                         "Top Referrers",
@@ -278,14 +306,15 @@ fun ReferScreen(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                     )
                 } else {
-                    val medals = listOf("🥇", "🥈", "🥉")
+                    val medals = listOf(SanjiEmoji.TROPHY, "🥈", "🥉")
                     topReferrers.forEachIndexed { idx, r ->
                         val isMe = r.uid == uid
                         val medal = if (idx < 3) medals[idx] else "#${idx + 1}"
                         Surface(
                             shape = RoundedCornerShape(10.dp),
                             color = if (isMe) colors.primary.copy(alpha = 0.12f) else colors.background,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                .fadeSlideIn(delayMs = 160 + idx * 30),
                         ) {
                             Row(
                                 modifier = Modifier.padding(10.dp),
@@ -318,15 +347,16 @@ fun ReferScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        // Share buttons
+        // Share
         Text(
-            "Share Invite",
+            "${SanjiEmoji.SHARE} Share Invite",
             fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
+            modifier = Modifier.fadeSlideIn(delayMs = 260),
         )
         Spacer(Modifier.height(8.dp))
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 280),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             ShareButton("WhatsApp", "🟢", onClick = { shareToWhatsApp() }, modifier = Modifier.weight(1f))
@@ -336,12 +366,16 @@ fun ReferScreen(
 
         Spacer(Modifier.height(24.dp))
 
-        // Apply referral code
+        // Apply
         if (referredBy.isNullOrBlank()) {
-            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = colors.surface,
+                modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 340),
+            ) {
                 Column(Modifier.padding(16.dp)) {
                     Text(
-                        "Got a referral code?",
+                        "${SanjiEmoji.STAR} Got a referral code?",
                         fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
                     )
                     Spacer(Modifier.height(6.dp))
@@ -380,7 +414,7 @@ fun ReferScreen(
                             }
                         },
                         enabled = !applying && inputCode.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        modifier = Modifier.fillMaxWidth().height(46.dp).pressScale(),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = Color.Black),
                     ) {
@@ -393,13 +427,21 @@ fun ReferScreen(
                 }
             }
         } else {
-            Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = colors.surface,
+                modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 340),
+            ) {
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("✅", fontSize = 20.sp)
+                        Text(SanjiEmoji.SUCCESS, fontSize = 20.sp)
                         Spacer(Modifier.width(8.dp))
                         Column {
-                            Text("Already referred", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+                            Text(
+                                "Already referred",
+                                fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                                color = colors.onBackground,
+                            )
                             Text(
                                 "You were referred by a friend",
                                 fontSize = 11.sp, color = colors.onSurfaceVariant,
@@ -413,9 +455,16 @@ fun ReferScreen(
         Spacer(Modifier.height(16.dp))
 
         // How it works
-        Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = colors.surface,
+            modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 380),
+        ) {
             Column(Modifier.padding(16.dp)) {
-                Text("How it works", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                Text(
+                    "How it works",
+                    fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
+                )
                 Spacer(Modifier.height(8.dp))
                 HowItWorksStep("1", "Share your code with friends")
                 HowItWorksStep("2", "They sign up with your code")
@@ -445,7 +494,7 @@ private fun ShareButton(
 ) {
     val colors = LocalSanjiColors.current
     Surface(
-        modifier = modifier,
+        modifier = modifier.pressScale(),
         onClick = onClick,
         shape = RoundedCornerShape(14.dp),
         color = colors.surface,
@@ -469,7 +518,7 @@ private fun HowItWorksStep(step: String, text: String) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Surface(
-            shape = RoundedCornerShape(50),
+            shape = CircleShape,
             color = colors.primary.copy(alpha = 0.15f),
             modifier = Modifier.size(24.dp),
         ) {
