@@ -11,6 +11,17 @@ sealed class AuthState {
         val profile: UserProfile?,
     ) : AuthState()
     data class Error(val message: String, val cause: Throwable? = null) : AuthState()
+
+    /**
+     * One-device-one-account enforcement: this device is already bound to a different account.
+     * Only fires for USER role. ADMIN+ are exempt.
+     *
+     * `lockedUid` = uid of the account currently owning this device.
+     */
+    data class DeviceLocked(
+        val lockedUid: String,
+        val message: String = "This device is already registered to another account. Sign in with that account, or contact admin.",
+    ) : AuthState()
 }
 
 enum class UserRole(val priority: Int) {
@@ -33,6 +44,12 @@ enum class UserRole(val priority: Int) {
 
     val canEditOwner: Boolean
         get() = this == OWNER
+
+    /**
+     * Exempt from one-device-one-account restriction.
+     */
+    val isDeviceLockExempt: Boolean
+        get() = priority >= ADMIN.priority
 
     companion object {
         fun fromString(s: String?): UserRole = when (s?.lowercase()?.trim()) {
@@ -70,6 +87,9 @@ data class UserProfile(
     val premium: Boolean = false,
     val createdAt: Long = 0L,
     val lastActive: Long = 0L,
+    // NEW
+    val deviceFingerprint: String = "",
+    val specialMsgVersionSeen: Int = 0,
 ) {
     fun needsTermsAcceptance(currentTermsVersion: Int, termsRequired: Boolean): Boolean {
         if (!termsRequired) return false
