@@ -13,23 +13,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -45,21 +41,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.sanji.bomberpro.services.Appeal
 import com.sanji.bomberpro.services.SupportService
 import com.sanji.bomberpro.services.Ticket
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private enum class SupportAdminView { TICKETS, DETAIL, APPEALS }
+private enum class SupportAdminView { TICKETS, DETAIL }
 
 private val FMT_SHORT = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
 private fun fmtShort(ts: Long): String =
     try { FMT_SHORT.format(Date(ts * 1000L)) } catch (_: Exception) { "—" }
 
+/**
+ * Support tickets admin view.
+ *
+ * NOTE: Ban appeals are handled by a SEPARATE screen — AppealsAdminScreen (uses `appeals` collection).
+ * This screen is ONLY for support tickets (`tickets` collection). Clean separation, no duplication.
+ */
 @Composable
 fun SupportAdminScreen(
     adminUid: String,
@@ -71,10 +75,8 @@ fun SupportAdminScreen(
     val scope = rememberCoroutineScope()
 
     var view by remember { mutableStateOf(SupportAdminView.TICKETS) }
-    var tab by remember { mutableStateOf(0) }
 
     var tickets by remember { mutableStateOf<List<Ticket>>(emptyList()) }
-    var appeals by remember { mutableStateOf<List<Appeal>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var selectedTicket by remember { mutableStateOf<Ticket?>(null) }
     var replyText by remember { mutableStateOf("") }
@@ -83,7 +85,6 @@ fun SupportAdminScreen(
     suspend fun refreshInternal() {
         loading = true
         tickets = service.listOpenTickets()
-        appeals = service.listAppeals(onlyOpen = true)
         loading = false
     }
 
@@ -98,7 +99,7 @@ fun SupportAdminScreen(
                     Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
                 }
                 Text(
-                    "Support",
+                    "${SanjiEmoji.MESSAGE} Support (${tickets.size})",
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                     color = colors.onBackground, modifier = Modifier.weight(1f),
                 )
@@ -108,26 +109,10 @@ fun SupportAdminScreen(
             }
 
             Spacer(Modifier.height(8.dp))
-
-            ScrollableTabRow(
-                selectedTabIndex = tab,
-                containerColor = Color.Transparent,
-                contentColor = colors.primary,
-                edgePadding = 0.dp,
-            ) {
-                listOf("Tickets (${tickets.size})", "Appeals (${appeals.size})").forEachIndexed { i, label ->
-                    Tab(
-                        selected = tab == i,
-                        onClick = { tab = i },
-                        text = {
-                            Text(label, fontWeight = if (tab == i) FontWeight.Bold else FontWeight.Normal, fontSize = 12.sp)
-                        },
-                        selectedContentColor = colors.primary,
-                        unselectedContentColor = colors.onSurfaceVariant,
-                    )
-                }
-            }
-
+            Text(
+                "Open support tickets from users. Ban appeals are managed separately.",
+                fontSize = 11.sp, color = colors.onSurfaceVariant,
+            )
             Spacer(Modifier.height(12.dp))
 
             if (loading) {
@@ -137,88 +122,49 @@ fun SupportAdminScreen(
                 return
             }
 
-            if (tab == 0) {
-                if (tickets.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (tickets.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(SanjiEmoji.SUCCESS, fontSize = 42.sp)
+                        Spacer(Modifier.height(8.dp))
                         Text("No open tickets", color = colors.onSurfaceVariant, fontSize = 13.sp)
-                    }
-                } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(tickets) { t ->
-                            Surface(
-                                onClick = { selectedTicket = t; replyText = ""; view = SupportAdminView.DETAIL },
-                                shape = RoundedCornerShape(12.dp),
-                                color = colors.surface,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Column(Modifier.padding(12.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("🟢", fontSize = 12.sp)
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(
-                                            t.userName.ifBlank { "User" },
-                                            fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                                            color = colors.onBackground, modifier = Modifier.weight(1f),
-                                        )
-                                        Text(fmtShort(t.ts), fontSize = 10.sp, color = colors.onSurfaceVariant)
-                                    }
-                                    Text(
-                                        "UID: ${t.uid}",
-                                        fontSize = 9.sp, color = colors.onSurfaceVariant,
-                                    )
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(t.text.take(80), fontSize = 11.sp, color = colors.onBackground, maxLines = 2)
-                                    Text("Replies: ${t.replies.size}", fontSize = 10.sp, color = colors.onSurfaceVariant)
-                                }
-                            }
-                        }
                     }
                 }
             } else {
-                if (appeals.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No open appeals", color = colors.onSurfaceVariant, fontSize = 13.sp)
-                    }
-                } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(appeals) { a ->
-                            Surface(shape = RoundedCornerShape(12.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
-                                Column(Modifier.padding(12.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("🔓", fontSize = 12.sp)
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(
-                                            a.userName.ifBlank { "User" },
-                                            fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                                            color = colors.onBackground, modifier = Modifier.weight(1f),
-                                        )
-                                        Text(fmtShort(a.ts), fontSize = 10.sp, color = colors.onSurfaceVariant)
-                                    }
-                                    Text("UID: ${a.uid}", fontSize = 9.sp, color = colors.onSurfaceVariant)
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(a.text.take(120), fontSize = 11.sp, color = colors.onBackground, maxLines = 3)
-                                    Spacer(Modifier.height(6.dp))
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Button(
-                                            onClick = {
-                                                scope.launch {
-                                                    service.resolveAppeal(a.id)
-                                                    refreshInternal()
-                                                }
-                                            },
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = colors.success.copy(alpha = 0.15f),
-                                                contentColor = colors.success,
-                                            ),
-                                            modifier = Modifier.height(32.dp),
-                                            shape = RoundedCornerShape(8.dp),
-                                        ) {
-                                            Icon(Icons.Default.Done, null, modifier = Modifier.size(14.dp))
-                                            Spacer(Modifier.width(4.dp))
-                                            Text("Resolved", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    itemsIndexed(tickets) { idx, t ->
+                        Surface(
+                            onClick = {
+                                selectedTicket = t
+                                replyText = ""
+                                view = SupportAdminView.DETAIL
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            color = colors.surface,
+                            modifier = Modifier.fillMaxWidth().pressScale()
+                                .fadeSlideIn(delayMs = idx * 40),
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(SanjiEmoji.PENDING, fontSize = 12.sp)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        t.userName.ifBlank { "User" },
+                                        fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                                        color = colors.onBackground, modifier = Modifier.weight(1f),
+                                    )
+                                    Text(fmtShort(t.ts), fontSize = 10.sp, color = colors.onSurfaceVariant)
                                 }
+                                Text(
+                                    "UID: ${t.uid}",
+                                    fontSize = 9.sp, color = colors.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(t.text.take(80), fontSize = 11.sp, color = colors.onBackground, maxLines = 2)
+                                Text(
+                                    "${SanjiEmoji.MESSAGE} Replies: ${t.replies.size}",
+                                    fontSize = 10.sp, color = colors.onSurfaceVariant,
+                                )
                             }
                         }
                     }
@@ -241,7 +187,7 @@ fun SupportAdminScreen(
                         Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
                     }
                     Text(
-                        "Ticket",
+                        "${SanjiEmoji.MESSAGE} Ticket",
                         fontSize = 18.sp, fontWeight = FontWeight.Bold,
                         color = colors.onBackground, modifier = Modifier.weight(1f),
                     )
@@ -276,7 +222,7 @@ fun SupportAdminScreen(
                             ts = t.ts,
                         )
                     }
-                    items(t.replies) { r ->
+                    itemsIndexed(t.replies) { _, r ->
                         val isAdminReply = r.fromUid == adminUid || r.fromUid != t.uid
                         MessageBubble(
                             text = r.text,
@@ -297,9 +243,9 @@ fun SupportAdminScreen(
                             modifier = Modifier.weight(1f),
                         )
                         Spacer(Modifier.width(8.dp))
-                        IconButton(
+                        Button(
                             onClick = {
-                                if (replyText.isBlank()) return@IconButton
+                                if (replyText.isBlank()) return@Button
                                 scope.launch {
                                     service.addTicketReply(t.id, adminUid, replyText)
                                     replyText = ""
@@ -308,8 +254,10 @@ fun SupportAdminScreen(
                                 }
                             },
                             enabled = replyText.isNotBlank(),
+                            modifier = Modifier.height(56.dp).pressScale(),
+                            shape = RoundedCornerShape(12.dp),
                         ) {
-                            Icon(Icons.Default.Send, "Send", tint = colors.primary)
+                            Icon(Icons.Default.Send, "Send", tint = colors.onPrimary)
                         }
                     }
                 } else {
@@ -319,11 +267,12 @@ fun SupportAdminScreen(
                         textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
                     )
                 }
-            }
-        }
 
-        SupportAdminView.APPEALS -> {
-            LaunchedEffect(Unit) { view = SupportAdminView.TICKETS }
+                if (error != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(error!!, color = colors.error, fontSize = 12.sp)
+                }
+            }
         }
     }
 }
@@ -337,7 +286,7 @@ private fun MessageBubble(
 ) {
     val colors = LocalSanjiColors.current
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 0),
         horizontalArrangement = if (isAdmin) Arrangement.End else Arrangement.Start,
     ) {
         Surface(
