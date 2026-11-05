@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -136,7 +137,7 @@ fun UserSettingsScreen(
                     Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
                 }
                 Text(
-                    "Settings",
+                    "${SanjiEmoji.SETTINGS} Settings",
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                     color = colors.onBackground, modifier = Modifier.weight(1f),
                 )
@@ -148,19 +149,17 @@ fun UserSettingsScreen(
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = colors.surface,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fadeSlideIn(delayMs = 0),
+                modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 0),
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
-                                .size(48.dp)
-                                .background(colors.primary.copy(alpha = 0.2f), RoundedCornerShape(50)),
+                                .size(52.dp)
+                                .background(colors.primary.copy(alpha = 0.2f), CircleShape),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(Icons.Default.Person, null, tint = colors.primary, modifier = Modifier.size(26.dp))
+                            Icon(Icons.Default.Person, null, tint = colors.primary, modifier = Modifier.size(28.dp))
                         }
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
@@ -183,7 +182,7 @@ fun UserSettingsScreen(
                             )
                         }
                     }
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(12.dp))
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = colors.background,
@@ -195,7 +194,7 @@ fun UserSettingsScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    "Your User ID",
+                                    "${SanjiEmoji.KEY} Your User ID",
                                     fontSize = 10.sp, color = colors.onSurfaceVariant,
                                 )
                                 Text(
@@ -227,7 +226,7 @@ fun UserSettingsScreen(
                         modifier = Modifier.fillMaxWidth().pressScale(),
                     ) {
                         Text(
-                            "Change Username",
+                            "${SanjiEmoji.EDIT} Change Username",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = colors.primary,
@@ -246,7 +245,8 @@ fun UserSettingsScreen(
                 onClick = { showThemePicker = true },
                 shape = RoundedCornerShape(14.dp),
                 color = colors.surface,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).pressScale(),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).pressScale()
+                    .fadeSlideIn(delayMs = 80),
             ) {
                 Row(
                     modifier = Modifier.padding(14.dp),
@@ -267,7 +267,10 @@ fun UserSettingsScreen(
                             color = colors.onSurfaceVariant,
                         )
                     }
-                    Text("${themeManager.allThemes.size}", fontSize = 12.sp, color = colors.primary, fontWeight = FontWeight.Bold)
+                    Text(
+                        "${themeManager.allThemes.size}",
+                        fontSize = 12.sp, color = colors.primary, fontWeight = FontWeight.Bold,
+                    )
                 }
             }
 
@@ -279,7 +282,8 @@ fun UserSettingsScreen(
                 onClick = { openTelegram("https://t.me/sanjipro5") },
                 shape = RoundedCornerShape(14.dp),
                 color = colors.surface,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).pressScale(),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).pressScale()
+                    .fadeSlideIn(delayMs = 140),
             ) {
                 Row(
                     modifier = Modifier.padding(14.dp),
@@ -289,7 +293,7 @@ fun UserSettingsScreen(
                     Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Contact Admin",
+                            "${SanjiEmoji.MESSAGE} Contact Admin",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = colors.onBackground,
@@ -310,7 +314,7 @@ fun UserSettingsScreen(
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = colors.surface,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).fadeSlideIn(delayMs = 200),
             ) {
                 Column(Modifier.padding(14.dp)) {
                     Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
@@ -330,7 +334,7 @@ fun UserSettingsScreen(
             // Logout
             Button(
                 onClick = { showLogoutConfirm = true },
-                modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
+                modifier = Modifier.fillMaxWidth().height(52.dp).pressScale().fadeSlideIn(delayMs = 260),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = colors.error.copy(alpha = 0.15f),
@@ -344,13 +348,13 @@ fun UserSettingsScreen(
 
             Spacer(Modifier.height(10.dp))
 
-            // Delete account
+            // Delete
             Button(
                 onClick = {
                     deleteConfirmText = ""
                     showDeleteConfirm = true
                 },
-                modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
+                modifier = Modifier.fillMaxWidth().height(52.dp).pressScale().fadeSlideIn(delayMs = 300),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color.Transparent,
@@ -375,7 +379,6 @@ fun UserSettingsScreen(
         }
     }
 
-    // Theme picker
     if (showThemePicker) {
         ThemePickerDialog(
             current = currentTheme,
@@ -390,7 +393,6 @@ fun UserSettingsScreen(
         )
     }
 
-    // Logout confirm
     if (showLogoutConfirm) {
         AlertDialog(
             onDismissRequest = { showLogoutConfirm = false },
@@ -414,7 +416,6 @@ fun UserSettingsScreen(
         )
     }
 
-    // Username edit
     if (showUsernameEdit) {
         AlertDialog(
             onDismissRequest = { showUsernameEdit = false },
@@ -468,7 +469,6 @@ fun UserSettingsScreen(
         )
     }
 
-    // Delete confirm
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { if (!deleting) showDeleteConfirm = false },
@@ -582,7 +582,7 @@ private fun ThemePickerDialog(
         containerColor = colors.surface,
         titleContentColor = colors.onBackground,
         textContentColor = colors.onBackground,
-        title = { Text("Choose Theme") },
+        title = { Text("${SanjiEmoji.SPARKLE} Choose Theme") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 all.forEach { theme ->
@@ -591,7 +591,7 @@ private fun ThemePickerDialog(
                         onClick = { onSelect(theme) },
                         shape = RoundedCornerShape(10.dp),
                         color = if (isSelected) colors.primary.copy(alpha = 0.12f) else colors.background,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().pressScale(),
                     ) {
                         Row(
                             modifier = Modifier.padding(12.dp),
@@ -601,17 +601,17 @@ private fun ThemePickerDialog(
                                 Box(
                                     modifier = Modifier
                                         .size(16.dp)
-                                        .background(theme.primary, RoundedCornerShape(50))
+                                        .background(theme.primary, CircleShape)
                                 )
                                 Box(
                                     modifier = Modifier
                                         .size(16.dp)
-                                        .background(theme.secondary, RoundedCornerShape(50))
+                                        .background(theme.secondary, CircleShape)
                                 )
                                 Box(
                                     modifier = Modifier
                                         .size(16.dp)
-                                        .background(theme.accent, RoundedCornerShape(50))
+                                        .background(theme.accent, CircleShape)
                                 )
                             }
                             Spacer(Modifier.width(12.dp))
