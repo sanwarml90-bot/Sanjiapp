@@ -68,10 +68,16 @@ object FirebaseConfig {
     const val COL_SCHEDULED = "scheduled_blasts"
     const val COL_FORCE_JOIN = "force_join"
 
+    // NEW — device / special msg / deleted accounts
+    const val COL_DEVICE_LOCKS = "device_locks"
+    const val COL_SPECIAL_MSG = "special_msg"
+    const val COL_DELETED_ACCOUNTS = "deleted_accounts"
+
     // ============================================================
     //  FIRESTORE DOCS
     // ============================================================
     const val DOC_GLOBAL_SETTINGS = "global"
+    const val DOC_CURRENT_SPECIAL_MSG = "current"
 
     // ============================================================
     //  REALTIME DB PATHS (for device read)
@@ -126,9 +132,6 @@ object FirebaseConfig {
 
     // ============================================================
     //  FCM PUSH RELAY
-    //  The payment_bot.py or a Cloud Function listens on
-    //  `push_requests/{id}` and sends FCM. Token lives server-side.
-    //  If you don't have it set up, FCM falls back to Firestore inbox.
     // ============================================================
     const val PUSH_RELAY_ENABLED = true
 
