@@ -1,5 +1,7 @@
 package com.sanji.bomberpro.ui.home
 
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,6 +48,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,6 +73,7 @@ import com.sanji.bomberpro.ui.components.pressScale
 import com.sanji.bomberpro.ui.history.HistoryScreen
 import com.sanji.bomberpro.ui.otp.OtpScreen
 import com.sanji.bomberpro.ui.wallet.WalletScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -81,8 +85,10 @@ fun HomeScreen(
     onNavigate: (String) -> Unit,
 ) {
     val colors = LocalSanjiColors.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var currentTab by remember { mutableStateOf(HomeTab.HOME) }
+    var backPressedOnce by remember { mutableStateOf(false) }
 
     val isAdmin = role.priority >= UserRole.ADMIN.priority
     val isOwner = role.priority >= UserRole.SUPER_ADMIN.priority
@@ -97,8 +103,7 @@ fun HomeScreen(
         NotificationsService().unreadCountFlow(user.uid).collect { unreadNotifications = it }
     }
 
-    // Live device scan — kicks off on home, keeps refreshing every 30s.
-    // Pre-warms the cache for SmsBlastScreen so users don't need to press scan.
+    // Live device scan — pre-warm cache for blast screens
     val rtdb = remember { RealtimeDbService() }
     val userData = remember { UserDataService() }
     var onlineDevices by remember { mutableStateOf(0) }
@@ -116,9 +121,32 @@ fun HomeScreen(
         }
     }
 
-    // Update last active timestamp once per launch
     LaunchedEffect(user.uid) {
         try { userData.updateLastActive(user.uid) } catch (_: Exception) {}
+    }
+
+    // Reset back-press state
+    LaunchedEffect(backPressedOnce) {
+        if (backPressedOnce) {
+            delay(2000)
+            backPressedOnce = false
+        }
+    }
+
+    // Back button handling
+    BackHandler(enabled = true) {
+        when {
+            currentTab != HomeTab.HOME -> {
+                currentTab = HomeTab.HOME
+            }
+            backPressedOnce -> {
+                (context as? android.app.Activity)?.finish()
+            }
+            else -> {
+                backPressedOnce = true
+                Toast.makeText(context, "Press back again to exit", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     val liveCredits = (userMap["credits"] as? Number)?.toInt() ?: (profile?.credits ?: 0)
@@ -386,7 +414,6 @@ private fun HomeTabContent(
 
         Spacer(Modifier.height(16.dp))
 
-        // Hero blast card
         Surface(
             onClick = onStartBlast,
             modifier = Modifier.fillMaxWidth().height(120.dp).fadeSlideIn(delayMs = 140).pressScale(),
