@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,6 +40,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,6 +61,9 @@ import com.sanji.bomberpro.data.UserProfile
 import com.sanji.bomberpro.theme.AppTheme
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import com.sanji.bomberpro.theme.ThemeManager
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.launch
 
 @Composable
@@ -70,10 +77,14 @@ fun UserSettingsScreen(
     val colors = LocalSanjiColors.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val currentTheme by themeManager.currentTheme.collectAsState(initial = themeManager.defaultTheme)
 
     var showThemePicker by remember { mutableStateOf(false) }
     var showLogoutConfirm by remember { mutableStateOf(false) }
     var showUsernameEdit by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var deleteConfirmText by remember { mutableStateOf("") }
+    var deleting by remember { mutableStateOf(false) }
     var usernameInput by remember { mutableStateOf(profile?.username ?: "") }
     var error by remember { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf<String?>(null) }
@@ -97,6 +108,19 @@ fun UserSettingsScreen(
             success = "Copied"
         } catch (_: Exception) {
             error = "Copy failed"
+        }
+    }
+
+    LaunchedEffect(error) {
+        if (error != null) {
+            kotlinx.coroutines.delay(4000)
+            error = null
+        }
+    }
+    LaunchedEffect(success) {
+        if (success != null) {
+            kotlinx.coroutines.delay(2500)
+            success = null
         }
     }
 
@@ -124,7 +148,9 @@ fun UserSettingsScreen(
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = colors.surface,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fadeSlideIn(delayMs = 0),
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -158,7 +184,6 @@ fun UserSettingsScreen(
                         }
                     }
                     Spacer(Modifier.height(10.dp))
-                    // Own UID — copyable
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = colors.background,
@@ -192,25 +217,23 @@ fun UserSettingsScreen(
                         }
                     }
                     Spacer(Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Surface(
-                            onClick = {
-                                usernameInput = profile?.username ?: ""
-                                showUsernameEdit = true
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            color = colors.primary.copy(alpha = 0.12f),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                "Change Username",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = colors.primary,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(vertical = 10.dp),
-                            )
-                        }
+                    Surface(
+                        onClick = {
+                            usernameInput = profile?.username ?: ""
+                            showUsernameEdit = true
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        color = colors.primary.copy(alpha = 0.12f),
+                        modifier = Modifier.fillMaxWidth().pressScale(),
+                    ) {
+                        Text(
+                            "Change Username",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.primary,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(vertical = 10.dp),
+                        )
                     }
                 }
             }
@@ -223,7 +246,7 @@ fun UserSettingsScreen(
                 onClick = { showThemePicker = true },
                 shape = RoundedCornerShape(14.dp),
                 color = colors.surface,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).pressScale(),
             ) {
                 Row(
                     modifier = Modifier.padding(14.dp),
@@ -239,24 +262,24 @@ fun UserSettingsScreen(
                             color = colors.onBackground,
                         )
                         Text(
-                            "Change app color scheme",
+                            currentTheme.displayName,
                             fontSize = 11.sp,
                             color = colors.onSurfaceVariant,
                         )
                     }
-                    Text("6", fontSize = 12.sp, color = colors.primary, fontWeight = FontWeight.Bold)
+                    Text("${themeManager.allThemes.size}", fontSize = 12.sp, color = colors.primary, fontWeight = FontWeight.Bold)
                 }
             }
 
             Spacer(Modifier.height(20.dp))
 
-            // Contact / support
+            // Support
             SectionLabel("SUPPORT")
             Surface(
                 onClick = { openTelegram("https://t.me/sanjipro5") },
                 shape = RoundedCornerShape(14.dp),
                 color = colors.surface,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).pressScale(),
             ) {
                 Row(
                     modifier = Modifier.padding(14.dp),
@@ -307,7 +330,7 @@ fun UserSettingsScreen(
             // Logout
             Button(
                 onClick = { showLogoutConfirm = true },
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = colors.error.copy(alpha = 0.15f),
@@ -317,6 +340,26 @@ fun UserSettingsScreen(
                 Icon(Icons.Default.ExitToApp, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Log Out", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // Delete account
+            Button(
+                onClick = {
+                    deleteConfirmText = ""
+                    showDeleteConfirm = true
+                },
+                modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = colors.error,
+                ),
+            ) {
+                Icon(Icons.Default.DeleteForever, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Delete My Account", fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
 
             if (error != null) {
@@ -332,10 +375,10 @@ fun UserSettingsScreen(
         }
     }
 
-    // Theme picker dialog
+    // Theme picker
     if (showThemePicker) {
         ThemePickerDialog(
-            current = themeManager.defaultTheme,
+            current = currentTheme,
             all = themeManager.allThemes,
             onSelect = { t ->
                 scope.launch {
@@ -419,6 +462,91 @@ fun UserSettingsScreen(
                         label = { Text("Username") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+        )
+    }
+
+    // Delete confirm
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { if (!deleting) showDeleteConfirm = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (deleteConfirmText != "DELETE") return@TextButton
+                        deleting = true
+                        error = null
+                        scope.launch {
+                            val res = authManager.deleteOwnAccount()
+                            deleting = false
+                            if (res.isSuccess) {
+                                showDeleteConfirm = false
+                                onSignedOut()
+                            } else {
+                                error = res.exceptionOrNull()?.message ?: "Delete failed"
+                                showDeleteConfirm = false
+                            }
+                        }
+                    },
+                    enabled = !deleting && deleteConfirmText == "DELETE",
+                ) {
+                    if (deleting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = colors.error,
+                        )
+                    } else {
+                        Text("Delete Forever", color = colors.error, fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showDeleteConfirm = false },
+                    enabled = !deleting,
+                ) { Text("Cancel", color = colors.onSurfaceVariant) }
+            },
+            containerColor = colors.surface,
+            titleContentColor = colors.onBackground,
+            textContentColor = colors.onBackground,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(SanjiEmoji.WARNING, fontSize = 18.sp)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Delete Account?")
+                }
+            },
+            text = {
+                Column {
+                    Text(
+                        "This will permanently remove your account, release your device lock, and sign you out.",
+                        fontSize = 12.sp,
+                        color = colors.onBackground,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Blast history and transactions will be archived. Credits and coins will be lost.",
+                        fontSize = 11.sp,
+                        color = colors.error,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Type DELETE to confirm:",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.error,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = deleteConfirmText,
+                        onValueChange = { deleteConfirmText = it.uppercase() },
+                        placeholder = { Text("DELETE") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !deleting,
                     )
                 }
             },
