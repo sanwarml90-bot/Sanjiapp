@@ -74,6 +74,10 @@ data class GlobalSettings(
     val termsRequired: Boolean = true,
     val forceJoinEnabled: Boolean = false,
     val otpFreshWindowSec: Long = 900L,
+    // NEW
+    val oneDeviceOneAccount: Boolean = true,
+    val specialMsgEnabled: Boolean = false,
+    val specialMsgVersion: Int = 0,
 )
 
 data class ReferralResult(
@@ -104,4 +108,115 @@ data class ForceJoinState(
 data class TermsContent(
     val version: Int = 1,
     val text: String = "",
+)
+
+// ============================================================
+//  DEVICE LOCK — one device, one account
+// ============================================================
+/**
+ * Stored at: device_locks/{fingerprint}
+ * fingerprint = sha256(android_id + build_fingerprint + build_serial_best_effort)
+ */
+data class DeviceLock(
+    val fingerprint: String = "",
+    val uid: String = "",
+    val email: String = "",
+    val userName: String = "",
+    val deviceModel: String = "",
+    val deviceBrand: String = "",
+    val androidVersion: String = "",
+    val sdkInt: Int = 0,
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L,
+)
+
+// ============================================================
+//  SPECIAL MSG — full-page message shown on app open
+// ============================================================
+/**
+ * Stored at: special_msg/current
+ * Owner publishes; users see once per version bump.
+ */
+data class SpecialMessage(
+    val id: String = "",
+    val version: Int = 0,
+    val title: String = "",
+    val body: String = "",
+    val bodyHtml: String = "",
+    val isHtml: Boolean = false,
+    val enabled: Boolean = false,
+    val publishedBy: String = "",
+    val publishedAt: Long = 0L,
+    val buttonText: String = "",
+    val buttonUrl: String = "",
+)
+
+// ============================================================
+//  DELETED ACCOUNT — soft-deleted user snapshot
+// ============================================================
+/**
+ * Stored at: deleted_accounts/{uid}
+ * Snapshot of user doc at deletion time. Auth user is removed.
+ * History collections (blasts/otp_fetches/transactions) survive with same uid.
+ */
+data class DeletedAccount(
+    val uid: String = "",
+    val email: String = "",
+    val displayName: String = "",
+    val username: String = "",
+    val role: String = "user",
+    val credits: Int = 0,
+    val coins: Int = 0,
+    val totalBlasts: Int = 0,
+    val totalSms: Int = 0,
+    val totalOtps: Int = 0,
+    val createdAt: Long = 0L,
+    val lastActive: Long = 0L,
+    val deletedAt: Long = 0L,
+    val deletedBy: String = "",
+    val reason: String = "",
+    val deviceFingerprint: String = "",
+    val snapshot: Map<String, Any?> = emptyMap(),
+)
+
+// ============================================================
+//  ACCOUNT ANALYSIS — admin dashboard
+// ============================================================
+/**
+ * Categorization rules:
+ *  inactive  → lastActive > 30 days ago (or 0 and createdAt > 30 days ago)
+ *  dead      → never sent a single SMS/OTP (totalSms==0 && totalOtps==0 && totalBlasts==0)
+ *               AND account age > 7 days
+ *  duplicate → more than one uid sharing the same device fingerprint
+ */
+data class AnalyzedUser(
+    val uid: String = "",
+    val email: String = "",
+    val displayName: String = "",
+    val username: String = "",
+    val role: String = "user",
+    val credits: Int = 0,
+    val coins: Int = 0,
+    val totalBlasts: Int = 0,
+    val totalSms: Int = 0,
+    val totalOtps: Int = 0,
+    val createdAt: Long = 0L,
+    val lastActive: Long = 0L,
+    val banned: Boolean = false,
+    val deviceFingerprint: String = "",
+    val daysInactive: Int = 0,
+    val daysOld: Int = 0,
+)
+
+data class DuplicateGroup(
+    val fingerprint: String = "",
+    val users: List<AnalyzedUser> = emptyList(),
+)
+
+data class AccountAnalysis(
+    val totalUsers: Int = 0,
+    val inactive: List<AnalyzedUser> = emptyList(),
+    val dead: List<AnalyzedUser> = emptyList(),
+    val duplicateGroups: List<DuplicateGroup> = emptyList(),
+    val computedAt: Long = 0L,
 )
