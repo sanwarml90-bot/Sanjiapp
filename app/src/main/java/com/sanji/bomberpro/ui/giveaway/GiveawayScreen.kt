@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -41,6 +41,9 @@ import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.data.Giveaway
 import com.sanji.bomberpro.services.GiveawayService
 import com.sanji.bomberpro.theme.LocalSanjiColors
+import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
+import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -83,7 +86,7 @@ fun GiveawayScreen(
                 Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
             }
             Text(
-                "Giveaways",
+                "${SanjiEmoji.GIFT} Giveaways",
                 fontSize = 18.sp, fontWeight = FontWeight.Bold,
                 color = colors.onBackground, modifier = Modifier.weight(1f),
             )
@@ -130,7 +133,7 @@ fun GiveawayScreen(
         if (list.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("🎁", fontSize = 48.sp)
+                    Text(SanjiEmoji.GIFT, fontSize = 48.sp)
                     Spacer(Modifier.height(8.dp))
                     Text(
                         if (tab == 0) "No active giveaways" else "No ended giveaways",
@@ -143,11 +146,12 @@ fun GiveawayScreen(
         }
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(list) { gw ->
+            itemsIndexed(list) { idx, gw ->
                 GiveawayCard(
                     gw = gw,
                     isEnded = tab == 1,
                     isEntered = gw.entries.containsKey(uid),
+                    modifier = Modifier.fadeSlideIn(delayMs = idx * 40),
                     onClick = { onOpenDetail(gw.id) },
                 )
             }
@@ -160,6 +164,7 @@ private fun GiveawayCard(
     gw: Giveaway,
     isEnded: Boolean,
     isEntered: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val colors = LocalSanjiColors.current
@@ -167,12 +172,12 @@ private fun GiveawayCard(
         onClick = onClick,
         shape = RoundedCornerShape(14.dp),
         color = colors.surface,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().pressScale(),
     ) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (isEnded) "🏁" else "🎁",
+                    if (isEnded) SanjiEmoji.TROPHY else SanjiEmoji.GIFT,
                     fontSize = 18.sp,
                 )
                 Spacer(Modifier.width(8.dp))
@@ -188,7 +193,7 @@ private fun GiveawayCard(
                         color = colors.success.copy(alpha = 0.15f),
                     ) {
                         Text(
-                            "✓ joined",
+                            "${SanjiEmoji.SUCCESS} joined",
                             fontSize = 10.sp, fontWeight = FontWeight.Bold,
                             color = colors.success,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
@@ -198,7 +203,7 @@ private fun GiveawayCard(
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                "🏆 ${gw.prize.ifBlank { "Prize" }}",
+                "${SanjiEmoji.TROPHY} ${gw.prize.ifBlank { "Prize" }}",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = colors.primary,
@@ -214,12 +219,12 @@ private fun GiveawayCard(
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "👥 ${gw.entries.size}",
+                    "${SanjiEmoji.USERS} ${gw.entries.size}",
                     fontSize = 11.sp,
                     color = colors.onSurfaceVariant,
                 )
                 Text(
-                    "🏅 ${gw.winnersCount} winners",
+                    "${SanjiEmoji.STAR} ${gw.winnersCount} winners",
                     fontSize = 11.sp,
                     color = colors.onSurfaceVariant,
                 )
