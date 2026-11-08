@@ -74,7 +74,6 @@ data class GlobalSettings(
     val termsRequired: Boolean = true,
     val forceJoinEnabled: Boolean = false,
     val otpFreshWindowSec: Long = 900L,
-    // NEW
     val oneDeviceOneAccount: Boolean = true,
     val specialMsgEnabled: Boolean = false,
     val specialMsgVersion: Int = 0,
@@ -111,12 +110,8 @@ data class TermsContent(
 )
 
 // ============================================================
-//  DEVICE LOCK — one device, one account
+//  DEVICE LOCK
 // ============================================================
-/**
- * Stored at: device_locks/{fingerprint}
- * fingerprint = sha256(android_id + build_fingerprint + build_serial_best_effort)
- */
 data class DeviceLock(
     val fingerprint: String = "",
     val uid: String = "",
@@ -131,12 +126,8 @@ data class DeviceLock(
 )
 
 // ============================================================
-//  SPECIAL MSG — full-page message shown on app open
+//  SPECIAL MSG
 // ============================================================
-/**
- * Stored at: special_msg/current
- * Owner publishes; users see once per version bump.
- */
 data class SpecialMessage(
     val id: String = "",
     val version: Int = 0,
@@ -152,13 +143,8 @@ data class SpecialMessage(
 )
 
 // ============================================================
-//  DELETED ACCOUNT — soft-deleted user snapshot
+//  DELETED ACCOUNT
 // ============================================================
-/**
- * Stored at: deleted_accounts/{uid}
- * Snapshot of user doc at deletion time. Auth user is removed.
- * History collections (blasts/otp_fetches/transactions) survive with same uid.
- */
 data class DeletedAccount(
     val uid: String = "",
     val email: String = "",
@@ -180,15 +166,8 @@ data class DeletedAccount(
 )
 
 // ============================================================
-//  ACCOUNT ANALYSIS — admin dashboard
+//  ACCOUNT ANALYSIS
 // ============================================================
-/**
- * Categorization rules:
- *  inactive  → lastActive > 30 days ago (or 0 and createdAt > 30 days ago)
- *  dead      → never sent a single SMS/OTP (totalSms==0 && totalOtps==0 && totalBlasts==0)
- *               AND account age > 7 days
- *  duplicate → more than one uid sharing the same device fingerprint
- */
 data class AnalyzedUser(
     val uid: String = "",
     val email: String = "",
@@ -219,4 +198,20 @@ data class AccountAnalysis(
     val dead: List<AnalyzedUser> = emptyList(),
     val duplicateGroups: List<DuplicateGroup> = emptyList(),
     val computedAt: Long = 0L,
+)
+
+// ============================================================
+//  PROTECTED NUMBER
+// ============================================================
+/**
+ * Stored at: protected_numbers/{cleanNumber}
+ * Premium users and owner can protect ONE number each.
+ * That number cannot be bombed by anyone.
+ * Only owner can view/remove from admin panel.
+ */
+data class ProtectedNumber(
+    val number: String = "",
+    val uid: String = "",
+    val userName: String = "",
+    val protectedAt: Long = 0L,
 )
