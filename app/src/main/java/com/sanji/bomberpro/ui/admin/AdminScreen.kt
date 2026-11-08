@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlusOne
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -57,6 +58,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.data.FirebaseNode
+import com.sanji.bomberpro.data.ProtectedNumber
 import com.sanji.bomberpro.services.AdminService
 import com.sanji.bomberpro.services.AdminUser
 import com.sanji.bomberpro.services.AppLockService
@@ -64,15 +66,24 @@ import com.sanji.bomberpro.services.AppLockState
 import com.sanji.bomberpro.services.BulkDeductResult
 import com.sanji.bomberpro.services.DataExportService
 import com.sanji.bomberpro.services.FirebaseImportService
+import com.sanji.bomberpro.services.ProtectionService
 import com.sanji.bomberpro.services.RealtimeDbService
 import com.sanji.bomberpro.services.SettingsService
 import com.sanji.bomberpro.services.SupportService
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import com.sanji.bomberpro.ui.components.SanjiEmoji
+import com.sanji.bomberpro.ui.components.fadeSlideIn
 import com.sanji.bomberpro.ui.components.pressScale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+
+private val FMT_PROT = SimpleDateFormat("dd/MM/yy HH:mm", Locale.getDefault())
+private fun fmtProt(ts: Long): String =
+    try { FMT_PROT.format(Date(ts * 1000L)) } catch (_: Exception) { "—" }
 
 private enum class AdminView {
     HOME, FIREBASE, FIREBASE_BULK, FIREBASE_HEALTH, USERS, USER_DETAIL, USER_SMS_HISTORY, ROLES,
@@ -80,7 +91,7 @@ private enum class AdminView {
     LOGS, ANALYTICS, VERSION_CONTROL,
     GIVEAWAY_LIST, GIVEAWAY_CREATE,
     FORCE_JOIN, SUPPORT_ADMIN, PAYMENTS, APPEALS,
-    ACCOUNT_ANALYSIS, DELETED_ACCOUNTS, SPECIAL_MSG,
+    ACCOUNT_ANALYSIS, DELETED_ACCOUNTS, SPECIAL_MSG, PROTECTED_NUMBERS,
 }
 
 @Composable
@@ -166,6 +177,7 @@ fun AdminScreen(
             onOpenAnalytics = { view = AdminView.ANALYTICS },
             onOpenAccountAnalysis = { view = AdminView.ACCOUNT_ANALYSIS },
             onOpenDeletedAccounts = { view = AdminView.DELETED_ACCOUNTS },
+            onOpenProtectedNumbers = { view = AdminView.PROTECTED_NUMBERS },
             onOpenGiveaways = { view = AdminView.GIVEAWAY_LIST },
             onOpenVersionControl = { view = AdminView.VERSION_CONTROL },
             onOpenForceJoin = { view = AdminView.FORCE_JOIN },
@@ -201,6 +213,17 @@ fun AdminScreen(
             },
             onExit = onExit,
         )
+
+        AdminView.PROTECTED_NUMBERS -> {
+            if (isOwner) {
+                ProtectedNumbersScreen(
+                    adminUid = adminUid,
+                    onBack = { view = AdminView.HOME },
+                )
+            } else {
+                LaunchedEffect(Unit) { error = "Owner only"; view = AdminView.HOME }
+            }
+        }
 
         AdminView.SPECIAL_MSG -> SpecialMsgAdminScreen(
             adminUid = adminUid,
@@ -377,15 +400,14 @@ fun AdminScreen(
                 }
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(firebases) { fb ->
-                        val idx = firebases.indexOf(fb) + 1
+                    itemsIndexed(firebases) { idx, fb ->
                         val testResult = testResults[fb.id]
                         val isTestingThis = testRunningFor == fb.id
                         Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(12.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text("Firebase $idx", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                                        Text("Firebase ${idx + 1}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
                                         Text(fb.label, fontSize = 11.sp, color = colors.onSurfaceVariant)
                                         if (isOwner) {
                                             Spacer(Modifier.height(4.dp))
@@ -600,7 +622,7 @@ fun AdminScreen(
                 }
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(users) { u ->
+                    itemsIndexed(users) { _, u ->
                         Surface(
                             onClick = {
                                 if (!isOwner) error = "Only owner can view user details"
@@ -766,6 +788,137 @@ fun AdminScreen(
 }
 
 // ============================================================
+//  PROTECTED NUMBERS SCREEN (owner only)
+// ============================================================
+@Composable
+private fun ProtectedNumbersScreen(
+    adminUid: String,
+    onBack: () -> Unit,
+) {
+    val colors = LocalSanjiColors.current
+    val scope = rememberCoroutineScope()
+    val protectionService = remember { ProtectionService() }
+
+    var list by remember { mutableStateOf<List<ProtectedNumber>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var success by remember { mutableStateOf<String?>(null) }
+
+    suspend fun refresh() {
+        loading = true
+        list = protectionService.listAllProtected()
+        loading = false
+    }
+
+    LaunchedEffect(Unit) { refresh() }
+    LaunchedEffect(error) { if (error != null) { delay(4000); error = null } }
+    LaunchedEffect(success) { if (success != null) { delay(3000); success = null } }
+
+    Column(modifier = Modifier.fillMaxSize().background(colors.background).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, "Back", tint = colors.onBackground)
+            }
+            Text(
+                "🛡️ Protected Numbers (${list.size})",
+                fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                color = colors.onBackground, modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = { scope.launch { refresh() } }) {
+                Icon(Icons.Default.Refresh, "Refresh", tint = colors.primary)
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Premium users and owner can protect ONE number each. These numbers cannot be bombed.",
+            fontSize = 11.sp, color = colors.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(12.dp))
+
+        if (loading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = colors.primary)
+            }
+            return@Column
+        }
+
+        if (list.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(SanjiEmoji.SHIELD, fontSize = 48.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("No protected numbers yet", fontSize = 14.sp, color = colors.onSurfaceVariant)
+                }
+            }
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                itemsIndexed(list) { idx, pn ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = colors.surface,
+                        modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = idx * 40),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(SanjiEmoji.SHIELD, fontSize = 14.sp)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        pn.number,
+                                        fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                        color = colors.primary,
+                                        fontFamily = FontFamily.Monospace,
+                                    )
+                                }
+                                Text(
+                                    "Owner: ${pn.userName}",
+                                    fontSize = 11.sp, color = colors.onBackground,
+                                )
+                                Text(
+                                    "UID: ${pn.uid}",
+                                    fontSize = 9.sp, color = colors.onSurfaceVariant,
+                                    fontFamily = FontFamily.Monospace,
+                                )
+                                Text(
+                                    "Protected: ${fmtProt(pn.protectedAt)}",
+                                    fontSize = 10.sp, color = colors.onSurfaceVariant,
+                                )
+                            }
+                            IconButton(onClick = {
+                                scope.launch {
+                                    val ok = protectionService.adminRemoveNumber(pn.number, pn.uid)
+                                    if (ok) {
+                                        success = "Removed ${pn.number}"
+                                        refresh()
+                                    } else {
+                                        error = "Failed to remove"
+                                    }
+                                }
+                            }) {
+                                Icon(Icons.Default.Delete, "Remove", tint = colors.error)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (error != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(error!!, color = colors.error, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        }
+        if (success != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(success!!, color = colors.success, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+// ============================================================
 //  VERSION CONTROL SCREEN
 // ============================================================
 @Composable
@@ -836,8 +989,8 @@ private fun VersionControlScreen(
                     if (s.lockedAt > 0) {
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "Locked at: " + java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
-                                .format(java.util.Date(s.lockedAt * 1000L)),
+                            "Locked at: " + SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+                                .format(Date(s.lockedAt * 1000L)),
                             fontSize = 11.sp, color = colors.onSurfaceVariant,
                         )
                     }
@@ -1006,6 +1159,7 @@ private fun AdminHomeMenu(
     onOpenAnalytics: () -> Unit,
     onOpenAccountAnalysis: () -> Unit,
     onOpenDeletedAccounts: () -> Unit,
+    onOpenProtectedNumbers: () -> Unit,
     onOpenGiveaways: () -> Unit,
     onOpenVersionControl: () -> Unit,
     onOpenForceJoin: () -> Unit,
@@ -1055,6 +1209,7 @@ private fun AdminHomeMenu(
         AdminMenuCard(SanjiEmoji.CHART, "Account Analysis", "Inactive · dead · duplicate accounts", onOpenAccountAnalysis)
         AdminMenuCard(SanjiEmoji.USER, "Deleted Accounts", "Archived user snapshots · view history", onOpenDeletedAccounts)
         if (isOwner) {
+            AdminMenuCard(SanjiEmoji.SHIELD, "Protected Numbers", "Premium users' protected numbers · remove to unblock", onOpenProtectedNumbers)
             AdminMenuCard(SanjiEmoji.RECEIVE, "Data Export", "Export users, blasts, OTPs, transactions to JSON", onOpenExport)
             AdminMenuCard(SanjiEmoji.CREDITS, "Bulk Add Credits", "Add credits to every user at once", onOpenBulkAdd)
             AdminMenuCard(SanjiEmoji.CREDITS, "Bulk Deduct Credits", "Deduct amount OR wipe all credits from every user", onOpenBulkDeduct)
