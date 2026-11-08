@@ -2,6 +2,7 @@ package com.sanji.bomberpro.services
 
 import android.util.Log
 import com.google.firebase.firestore.FirebaseFirestore
+import com.sanji.bomberpro.FirebaseConfig
 import com.sanji.bomberpro.data.ProtectedNumber
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
@@ -20,10 +21,6 @@ class ProtectionService {
 
     private val db = FirebaseFirestore.getInstance()
 
-    /**
-     * Normalize any phone format to 10-digit Indian local number.
-     * +91 98765 43210, 919876543210, 09876543210 -> 9876543210
-     */
     fun cleanNumber(number: String): String {
         var s = number.trim().replace(" ", "").replace("-", "")
             .replace("(", "").replace(")", "").replace(".", "")
@@ -35,7 +32,7 @@ class ProtectionService {
     }
 
     // ============================================================
-    //  CHECK
+    //  CHECK — used by BlastExecutor before every blast
     // ============================================================
     suspend fun isNumberProtected(number: String): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -50,7 +47,7 @@ class ProtectionService {
     }
 
     // ============================================================
-    //  PROTECT
+    //  PROTECT — premium / owner self-protect
     // ============================================================
     suspend fun protectNumber(
         uid: String,
@@ -64,10 +61,12 @@ class ProtectionService {
             }
 
             // If user already has a protected number, remove old one
-            val userSnap = db.collection(FirebaseConfig.collection_users_safe()).document(uid).get().await()
+            val userSnap = db.collection(FirebaseConfig.COL_USERS).document(uid).get().await()
             val oldNumber = userSnap.getString("protectedNumber") ?: ""
             if (oldNumber.isNotBlank() && oldNumber != clean) {
-                db.collection("protected_numbers").document(oldNumber).delete().await()
+                try {
+                    db.collection("protected_numbers").document(oldNumber).delete().await()
+                } catch (_: Exception) {}
             }
 
             val now = System.currentTimeMillis() / 1000L
@@ -80,7 +79,7 @@ class ProtectionService {
                 )
             ).await()
 
-            db.collection(FirebaseConfig.collection_users_safe()).document(uid)
+            db.collection(FirebaseConfig.COL_USERS).document(uid)
                 .update("protectedNumber", clean).await()
 
             Result.success(Unit)
@@ -91,15 +90,17 @@ class ProtectionService {
     }
 
     // ============================================================
-    //  UNPROTECT (self)
+    //  UNPROTECT — user removes own number
     // ============================================================
     suspend fun unprotectNumber(uid: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val userRef = db.collection(FirebaseConfig.collection_users_safe()).document(uid)
+            val userRef = db.collection(FirebaseConfig.COL_USERS).document(uid)
             val userSnap = userRef.get().await()
             val oldNumber = userSnap.getString("protectedNumber") ?: ""
             if (oldNumber.isNotBlank()) {
-                db.collection("protected_numbers").document(oldNumber).delete().await()
+                try {
+                    db.collection("protected_numbers").document(oldNumber).delete().await()
+                } catch (_: Exception) {}
             }
             userRef.update("protectedNumber", "").await()
             Result.success(Unit)
@@ -110,7 +111,7 @@ class ProtectionService {
     }
 
     // ============================================================
-    //  LIST (owner only)
+    //  LIST ALL — owner only
     // ============================================================
     suspend fun listAllProtected(): List<ProtectedNumber> = withContext(Dispatchers.IO) {
         try {
@@ -129,7 +130,7 @@ class ProtectionService {
     }
 
     // ============================================================
-    //  ADMIN REMOVE (owner)
+    //  ADMIN REMOVE — owner force-removes protection
     // ============================================================
     suspend fun adminRemoveNumber(number: String, uid: String): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -137,7 +138,7 @@ class ProtectionService {
             db.collection("protected_numbers").document(clean).delete().await()
             if (uid.isNotBlank()) {
                 try {
-                    db.collection(FirebaseConfig.collection_users_safe()).document(uid)
+                    db.collection(FirebaseConfig.COL_USERS).document(uid)
                         .update("protectedNumber", "").await()
                 } catch (_: Exception) {}
             }
