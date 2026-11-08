@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -59,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sanji.bomberpro.data.AuthManager
 import com.sanji.bomberpro.data.UserProfile
+import com.sanji.bomberpro.services.ProtectionService
 import com.sanji.bomberpro.theme.AppTheme
 import com.sanji.bomberpro.theme.LocalSanjiColors
 import com.sanji.bomberpro.theme.ThemeManager
@@ -79,17 +81,27 @@ fun UserSettingsScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val currentTheme by themeManager.currentTheme.collectAsState(initial = themeManager.defaultTheme)
+    val protectionService = remember { ProtectionService() }
 
     var showThemePicker by remember { mutableStateOf(false) }
     var showLogoutConfirm by remember { mutableStateOf(false) }
     var showUsernameEdit by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showProtectDialog by remember { mutableStateOf(false) }
+    var showUnprotectConfirm by remember { mutableStateOf(false) }
+
     var deleteConfirmText by remember { mutableStateOf("") }
+    var protectInput by remember { mutableStateOf("") }
     var deleting by remember { mutableStateOf(false) }
+    var protecting by remember { mutableStateOf(false) }
     var usernameInput by remember { mutableStateOf(profile?.username ?: "") }
+    var currentProtected by remember { mutableStateOf(profile?.protectedNumber ?: "") }
+
     var error by remember { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf<String?>(null) }
     var savingUsername by remember { mutableStateOf(false) }
+
+    val canProtect = profile?.premium == true || profile?.role == "owner"
 
     fun openTelegram(url: String) {
         try {
@@ -237,6 +249,90 @@ fun UserSettingsScreen(
                 }
             }
 
+            // ============================================================
+            //  PROTECTION CARD — premium users + owner only
+            // ============================================================
+            if (canProtect) {
+                Spacer(Modifier.height(20.dp))
+                SectionLabel("🛡️ NUMBER PROTECTION")
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (currentProtected.isNotBlank()) colors.success.copy(alpha = 0.10f) else colors.surface,
+                    modifier = Modifier.fillMaxWidth().fadeSlideIn(delayMs = 60),
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Security, null, tint = colors.primary, modifier = Modifier.size(22.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Protect Your Number",
+                                    fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                    color = colors.onBackground,
+                                )
+                                Text(
+                                    "Protected numbers cannot be bombed",
+                                    fontSize = 11.sp, color = colors.onSurfaceVariant,
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+
+                        if (currentProtected.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = colors.background,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            "${SanjiEmoji.SUCCESS} Protected",
+                                            fontSize = 10.sp, color = colors.success, fontWeight = FontWeight.Bold,
+                                        )
+                                        Text(
+                                            currentProtected,
+                                            fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                            color = colors.onBackground,
+                                            fontFamily = FontFamily.Monospace,
+                                        )
+                                    }
+                                    TextButton(onClick = { showUnprotectConfirm = true }) {
+                                        Text("Remove", color = colors.error, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "You can protect only ONE number at a time. Remove current to change.",
+                                fontSize = 10.sp, color = colors.onSurfaceVariant,
+                            )
+                        } else {
+                            Text(
+                                "Add your number to stop all blasts on it. Only 1 number at a time.",
+                                fontSize = 11.sp, color = colors.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            Button(
+                                onClick = {
+                                    protectInput = ""
+                                    showProtectDialog = true
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = colors.primary,
+                                    contentColor = Color.Black,
+                                ),
+                                modifier = Modifier.fillMaxWidth().height(44.dp).pressScale(),
+                            ) {
+                                Text("${SanjiEmoji.SHIELD} Protect Number", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
             Spacer(Modifier.height(20.dp))
 
             // Appearance
@@ -379,6 +475,123 @@ fun UserSettingsScreen(
         }
     }
 
+    // ---- PROTECT DIALOG ----
+    if (showProtectDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!protecting) showProtectDialog = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (protecting) return@TextButton
+                        protecting = true
+                        error = null
+                        scope.launch {
+                            val uid = profile?.uid ?: ""
+                            val name = profile?.displayName ?: "User"
+                            val res = protectionService.protectNumber(uid, name, protectInput)
+                            protecting = false
+                            if (res.isSuccess) {
+                                currentProtected = protectionService.cleanNumber(protectInput)
+                                success = "✅ Number protected: $currentProtected"
+                                showProtectDialog = false
+                                authManager.refreshProfile()
+                            } else {
+                                error = res.exceptionOrNull()?.message ?: "Failed"
+                            }
+                        }
+                    },
+                    enabled = !protecting && protectInput.isNotBlank(),
+                ) {
+                    if (protecting) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = colors.primary)
+                    } else {
+                        Text("PROTECT", color = colors.primary, fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showProtectDialog = false }, enabled = !protecting) {
+                    Text("Cancel", color = colors.onSurfaceVariant)
+                }
+            },
+            containerColor = colors.surface,
+            titleContentColor = colors.onBackground,
+            textContentColor = colors.onBackground,
+            title = { Text("${SanjiEmoji.SHIELD} Protect Number") },
+            text = {
+                Column {
+                    Text(
+                        "Enter your phone number. This number will be blocked from all blasts.",
+                        fontSize = 11.sp, color = colors.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = protectInput,
+                        onValueChange = { protectInput = it.filter { c -> c.isDigit() || c == '+' || c == ' ' }.take(15) },
+                        label = { Text("Phone number") },
+                        placeholder = { Text("+91 9876543210") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !protecting,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = colors.warning.copy(alpha = 0.12f),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            "⚠️ Only ONE number can be protected at a time. You can remove later and change.",
+                            fontSize = 10.sp, color = colors.onBackground,
+                            modifier = Modifier.padding(8.dp),
+                        )
+                    }
+                }
+            },
+        )
+    }
+
+    // ---- UNPROTECT CONFIRM ----
+    if (showUnprotectConfirm) {
+        AlertDialog(
+            onDismissRequest = { showUnprotectConfirm = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    showUnprotectConfirm = false
+                    scope.launch {
+                        val uid = profile?.uid ?: ""
+                        val res = protectionService.unprotectNumber(uid)
+                        if (res.isSuccess) {
+                            currentProtected = ""
+                            success = "Protection removed"
+                            authManager.refreshProfile()
+                        } else {
+                            error = res.exceptionOrNull()?.message ?: "Failed"
+                        }
+                    }
+                }) {
+                    Text("Remove", color = colors.error, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUnprotectConfirm = false }) {
+                    Text("Cancel", color = colors.onSurfaceVariant)
+                }
+            },
+            containerColor = colors.surface,
+            titleContentColor = colors.onBackground,
+            textContentColor = colors.onBackground,
+            title = { Text("Remove Protection?") },
+            text = {
+                Text(
+                    "This number will no longer be protected. Anyone can blast it.",
+                    fontSize = 12.sp,
+                )
+            },
+        )
+    }
+
+    // ---- THEME PICKER ----
     if (showThemePicker) {
         ThemePickerDialog(
             current = currentTheme,
@@ -393,6 +606,7 @@ fun UserSettingsScreen(
         )
     }
 
+    // ---- LOGOUT ----
     if (showLogoutConfirm) {
         AlertDialog(
             onDismissRequest = { showLogoutConfirm = false },
@@ -416,6 +630,7 @@ fun UserSettingsScreen(
         )
     }
 
+    // ---- USERNAME EDIT ----
     if (showUsernameEdit) {
         AlertDialog(
             onDismissRequest = { showUsernameEdit = false },
@@ -469,6 +684,7 @@ fun UserSettingsScreen(
         )
     }
 
+    // ---- DELETE ACCOUNT ----
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { if (!deleting) showDeleteConfirm = false },
@@ -598,21 +814,9 @@ private fun ThemePickerDialog(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(16.dp)
-                                        .background(theme.primary, CircleShape)
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .size(16.dp)
-                                        .background(theme.secondary, CircleShape)
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .size(16.dp)
-                                        .background(theme.accent, CircleShape)
-                                )
+                                Box(modifier = Modifier.size(16.dp).background(theme.primary, CircleShape))
+                                Box(modifier = Modifier.size(16.dp).background(theme.secondary, CircleShape))
+                                Box(modifier = Modifier.size(16.dp).background(theme.accent, CircleShape))
                             }
                             Spacer(Modifier.width(12.dp))
                             Text(
